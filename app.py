@@ -14,6 +14,7 @@ from pipeline import PerceptionPipeline, annotate_instrument
 from instrument_geometry import InstrumentLayout, legacy_packet
 from aruco_tracking import ArucoBoardTracker, TrackingConfig
 from board_definition import BoardDefinition
+from board_calibration import CalibrationSessions
 from instrument_logic import InstrumentLogic, InteractionConfig
 from audio_engine import AudioEngine, MockAudioBackend, SoundDeviceBackend
 from camera_sources import cameras, open_camera
@@ -28,6 +29,10 @@ class Service:
         self.args = args
         self.lock = threading.RLock()
         self.record_control = threading.Lock()
+        self.pipeline_lock = threading.RLock()
+        self.calibration = CalibrationSessions(ROOT/'config/boards')
+        self.calibrating = False
+        self.raw_frame = None
         self.stop = threading.Event()
         self.packet = {'schema_version': 3, 'hands': [], 'status': 'starting',
                        'instrument': {'status': 'lost', 'reason': 'starting', 'visible_ids': []},
@@ -76,7 +81,7 @@ class Service:
         with self.lock:
             return self.latest(schema_version=3), self.jpeg
 
-    def publish(self, display, packet):
+    def publish(self, display, packet, raw_frame=None):
         ok, encoded = cv.imencode('.jpg', display, [cv.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             raise RuntimeError('JPEG encoding failed')
@@ -84,6 +89,7 @@ class Service:
         json.dumps(packet, allow_nan=False)
         with self.lock:
             self.packet, self.jpeg = packet, encoded.tobytes()
+            self.raw_frame = None if raw_frame is None else raw_frame.copy()
             if self.recording is not None:
                 self.recording.submit(packet)
 
@@ -96,6 +102,7 @@ class Service:
                                interaction=self.pipeline.logic.invalidate() if self.pipeline else
                                {'current_chord': None, 'chord_valid': False})
             self.jpeg = None
+            self.raw_frame = None
         if self.pipeline is not None:
             self.pipeline.board.reset()
 
@@ -145,8 +152,10 @@ class Service:
                         continue
                 first, failed = False, 0
                 captured, mono = time.time(), monotonic_s()
-                display, packet = self.pipeline.process(frame, captured, mono)
-                packet.setdefault('source', 'video' if self.args.video else 'camera')
+                with self.pipeline_lock:
+                    self.calibrating = self.calibration.active()
+                    display, packet = self.pipeline.process(frame, captured, mono, interaction_enabled=not self.calibrating)
+                    packet.setdefault('source', 'video' if self.args.video else 'camera')
                 if audio_mode == 'mock' and self.audio.status == 'mock':
                     backend.pump()
                     packet['audio'] = self.audio.snapshot()
@@ -156,7 +165,8 @@ class Service:
                 fps = instant if not fps else .9*fps + .1*instant
                 previous = now
                 packet.update(fps=round(fps, 1))
-                self.publish(annotate_instrument(display, packet, layout), packet)
+                with self.pipeline_lock:
+                    self.publish(annotate_instrument(display, packet, layout), packet, frame)
                 if self.args.demo:
                     self.stop.wait(1/30)
             with self.lock:
@@ -172,6 +182,34 @@ class Service:
             if self.audio is not None:
                 self.audio.close()
             self.set_recording(False)
+
+    def calibration_request(self, action, body):
+        with self.pipeline_lock:
+            if action == 'capture':
+                with self.lock:
+                    if monotonic_s()-self.packet.get('timestamp_monotonic_s', 0) > .5:
+                        raise ValueError('Camera frame is stale; wait for a fresh frame')
+                    result = self.calibration.capture(self.raw_frame, self.packet)
+                self.calibrating = True
+                if self.pipeline:
+                    self.pipeline.logic.invalidate('calibration_in_progress')
+                return result
+            if action == 'preview':
+                if self.pipeline is None:
+                    raise ValueError('Pipeline not ready')
+                return self.calibration.preview(body.get('session_id'), body.get('points_raw'),
+                                                body.get('board_id'), self.pipeline.layout)
+            if action == 'save':
+                board, path = self.calibration.save(body.get('session_id'), body.get('preview_token'))
+                self.pipeline.board = ArucoBoardTracker(board=board, config=self.pipeline.board.config)
+                self.pipeline.logic.invalidate('board_changed')
+                self.calibrating = False
+                return dict(saved=str(path.relative_to(ROOT)), board_id=board.board_id, active=True)
+            if action == 'cancel':
+                self.calibration.cancel(body.get('session_id'))
+                self.calibrating = False
+                return dict(cancelled=True)
+            raise ValueError('Unknown calibration action')
 
 
 def handler_for(service):
@@ -193,10 +231,10 @@ def handler_for(service):
         def do_GET(self):
             path = urlparse(self.path).path
             try:
-                if path in ('/', '/app.js', '/style.css'):
-                    filename = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}[path]
+                if path in ('/', '/app.js', '/style.css', '/calibration.js'):
+                    filename = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/calibration.js': 'calibration.js'}[path]
                     content_type = {'/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
-                                    '/style.css': 'text/css; charset=utf-8'}[path]
+                                    '/style.css': 'text/css; charset=utf-8', '/calibration.js': 'text/javascript; charset=utf-8'}[path]
                     self.send(200, (ROOT/'web'/filename).read_bytes(), content_type)
                 elif path in ('/api/landmarks', '/api/state'):
                     self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
@@ -228,7 +266,17 @@ def handler_for(service):
                 return
             path = urlparse(self.path).path
             try:
-                if path == '/api/record/start':
+                if path.startswith('/api/calibration/'):
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 <= length <= 16384:
+                        raise ValueError('Request body exceeds 16 KiB')
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        raise ValueError('Expected a JSON object')
+                    result = service.calibration_request(path.rsplit('/', 1)[-1], body)
+                    self.send(200, json.dumps(result, allow_nan=False).encode(), 'application/json')
+                    return
+                elif path == '/api/record/start':
                     if service.latest()['status'] != 'running':
                         self.send(409, b'Camera not running', 'text/plain')
                         return
@@ -242,6 +290,8 @@ def handler_for(service):
                     self.send(404, b'Not found', 'text/plain')
                     return
                 self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError, KeyError) as exc:
+                self.send(400, str(exc).encode(), 'text/plain; charset=utf-8')
             except (OSError, RuntimeError) as exc:
                 self.send(500, str(exc).encode(), 'text/plain; charset=utf-8')
     return Handler

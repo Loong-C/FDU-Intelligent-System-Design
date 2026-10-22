@@ -19,7 +19,7 @@ class PerceptionPipeline:
         self.audio = audio
         self.recent_events = deque(maxlen=32)
 
-    def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None):
+    def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None, interaction_enabled=True):
         captured = time.time() if timestamp_unix_s is None else timestamp_unix_s
         mono = monotonic_s() if timestamp_monotonic_s is None else timestamp_monotonic_s
         started = time.perf_counter()
@@ -29,7 +29,10 @@ class PerceptionPipeline:
         fuse_hands(packet, instrument)
         packet.update(timestamp_monotonic_s=mono, status='running', layout=self.layout.regions(),
                       vision_total_ms=round((time.perf_counter() - started) * 1000, 3))
-        packet['interaction'], packet['events'] = self.logic.process(packet)
+        if interaction_enabled:
+            packet['interaction'], packet['events'] = self.logic.process(packet)
+        else:
+            packet['interaction'], packet['events'] = self.logic.invalidate('calibration_in_progress'), []
         for event in packet['events']:
             self.recent_events.append(event)
             if self.audio is not None:

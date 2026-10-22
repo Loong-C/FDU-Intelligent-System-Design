@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MotionMuse 幻奏 · FDU 演奏台</title>
-<link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+<link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/calibration.js" defer></script>
 </head>
 <body><main>
 <header class="topbar"><div><div class="eyebrow">FDU × MOTIONMUSE / VISION INSTRUMENT</div><h1>幻奏<span>让动作成为音乐。</span></h1></div><div class="top-status"><span id="status">正在连接本地服务</span><small id="cameraName">等待摄像头</small></div></header>
@@ -23,6 +23,8 @@
 <div class="readout"><span>最近扫弦</span><strong id="event">—</strong><small id="eventDetail">等待新事件</small></div>
 <div class="hands" id="hands">等待手部</div>
 <div class="controls"><button id="record">开始录制</button><button id="stop" class="secondary">停止服务</button></div>
+<button id="calibrate" class="secondary">板面标定</button>
+<p id="qualityReason" class="hint"></p>
 <p id="recording" class="hint">录制节点、板面和事件；不保存视频。</p><div id="error" role="status" class="error"></div>
 </aside>
 </section>
@@ -31,10 +33,22 @@
 <div class="events"><div class="section-label">04 / 事件记录 <span>仅展示，不重播</span></div><ol id="events"><li>尚无扫弦事件</li></ol></div>
 </section>
 <details id="debug"><summary>调试面板 <span>21 点坐标 · 局部三维投影 · 原始 API</span></summary><div class="debug-body">
+<pre id="poseQuality" aria-label="定位质量"></pre>
 <div class="debug-head"><label>手部 <select id="selectHand" aria-label="选择手部"></select></label><a href="/api/landmarks" target="_blank" rel="noopener">查看完整 JSON ↗</a></div>
 <canvas id="world" width="800" height="300" aria-label="手部局部坐标 XY 和 XZ 投影"></canvas>
 <p class="hint">模型局部三维估计；不是摄像机或板面全局坐标。灰色板面表示短时保持，禁止发声。</p>
 <div class="table-scroll"><table><thead><tr><th>节点</th><th>名称</th><th>X / px</th><th>Y / px</th><th>Z / 相对值</th><th>X / 归一化</th><th>Y / 归一化</th><th>U / 板面</th><th>V / 板面</th></tr></thead><tbody id="nodes"></tbody></table></div>
 </div></details>
 <footer><span>本地视觉 · 本地音频 · 无需云端推理</span><span>FDU / MOTIONMUSE</span></footer>
-</main></body></html>
+</main>
+<dialog id="calibrationDialog" aria-labelledby="calibrationTitle">
+<h2 id="calibrationTitle">板面标定</h2>
+<p>捕获后画面冻结，演奏暂停。按板面自身的左上 → 右上 → 右下 → 左下选择四个参考点。镜像画面中仍按物理板面的顺序选点。</p>
+<p class="hint">参考点定义 (0,0)、(1,0)、(1,1)、(0,1)，不要求位于板子外轮廓。请让至少两枚分散的标记清晰可见。</p>
+<div class="calibration-image"><canvas id="calibrationCanvas" width="640" height="480" aria-label="冻结图像，点击四个参考点"></canvas></div>
+<p id="calibrationCount" aria-live="polite"></p>
+<label>板面名称 <input id="boardName" value="my_board" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]*" autocomplete="off"></label>
+<div class="calibration-controls"><button id="calibrationCapture">捕获 / 重新捕获</button><button id="calibrationUndo" class="secondary">撤销一点</button><button id="calibrationReset" class="secondary">重选四点</button><button id="calibrationPreview">预览</button><button id="calibrationSave">确认保存并启用</button><button id="calibrationCancel" class="secondary">取消</button></div>
+<p id="calibrationError" class="error" role="status"></p>
+</dialog>
+</body></html>

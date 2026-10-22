@@ -18,7 +18,7 @@ function clearLive(message) {
   $('fps').textContent = '—';
   $('event').textContent = '—';
   $('boardState').textContent = 'UNAVAILABLE';
-  $('markerState').textContent = '— / 4 MARKERS';
+  $('markerState').textContent = '等待标记';
   $('frameInfo').textContent = '无新鲜画面';
   $('audioState').textContent = '状态不可用';
   $('audioDetail').textContent = '等待新的服务状态';
@@ -69,8 +69,10 @@ function render(data) {
   $('totalMs').textContent = fmt(data.vision_total_ms);
   $('chord').textContent = interaction.current_chord || '—';
   $('chordState').textContent = interaction.chord_valid ? '左手选择有效' : interaction.current_chord ? '上次选择 · 当前不可发声' : interaction.candidate_chord ? '候选 '+interaction.candidate_chord+' · 请稍作停留' : '等待左手选择';
-  $('boardState').textContent = ({valid:'VALID · 已定位', held:'HELD · 暂停演奏', lost:'LOST · 等待标记'})[board.status] || '等待定位';
-  $('markerState').textContent = (board.visible_ids || []).filter(i=>[0,1,2,3].includes(i)).length+' / 4 MARKERS'+(board.homography_age_s ? ' · '+fmt(board.homography_age_s, 2)+' s' : '');
+  $('boardState').textContent = ({valid:'VALID · 已定位', degraded:'DEGRADED · 暂停演奏', held:'HELD · 暂停演奏', lost:'LOST · 等待标记'})[board.status] || '等待定位';
+  $('markerState').textContent = (board.pose_quality?.visible_marker_count ?? 0)+' / '+(board.required_ids?.length ?? 0)+' MARKERS · IDs '+(board.visible_ids || []).join(', ');
+  $('qualityReason').textContent = board.reason || (board.board_id ? '板面：'+board.board_id : '');
+  $('poseQuality').textContent = JSON.stringify(board.pose_quality || {}, null, 2);
   $('audioState').textContent = ({ready:'输出流就绪', mock:'MOCK · 无实际声音', disabled:'已关闭', error:'ERROR · 输出不可用', closed:'已关闭'})[data.audio_status] || '初始化中';
   $('audioDetail').textContent = audio.error || (audio.backend || '—')+' · 已消费 '+(audio.played_events || 0)+' · 队列 '+(audio.queue_depth || 0)+' · 丢弃 '+(audio.dropped_events || 0);
   const recent = data.recent_events || [], event = recent.at(-1);
