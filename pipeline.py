@@ -1,5 +1,6 @@
 """Single-frame orchestration; camera ownership stays in app.Service."""
 import time
+from collections import deque
 import cv2 as cv
 import numpy as np
 from aruco_tracking import ArucoBoardTracker
@@ -9,11 +10,13 @@ from instrument_logic import InstrumentLogic
 
 
 class PerceptionPipeline:
-    def __init__(self, hands=None, board=None, layout=None, logic=None):
+    def __init__(self, hands=None, board=None, layout=None, logic=None, audio=None):
         self.hands = hands if hands is not None else HandTracker()
         self.board = board if board is not None else ArucoBoardTracker()
         self.layout = layout or InstrumentLayout()
         self.logic = logic if logic is not None else InstrumentLogic(self.layout)
+        self.audio = audio
+        self.recent_events = deque(maxlen=32)
 
     def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None):
         captured = time.time() if timestamp_unix_s is None else timestamp_unix_s
@@ -26,6 +29,13 @@ class PerceptionPipeline:
         packet.update(timestamp_monotonic_s=mono, status='running', layout=self.layout.regions(),
                       vision_total_ms=round((time.perf_counter() - started) * 1000, 3))
         packet['interaction'], packet['events'] = self.logic.process(packet)
+        for event in packet['events']:
+            self.recent_events.append(event)
+            if self.audio is not None:
+                self.audio.submit(event)
+        packet['recent_events'] = list(self.recent_events)
+        packet['audio'] = self.audio.snapshot() if self.audio is not None else {'status': 'disabled'}
+        packet['audio_status'] = packet['audio']['status']
         return display, packet
 
 

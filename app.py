@@ -12,6 +12,7 @@ import cv2 as cv
 from cv2_enumerate_cameras import enumerate_cameras
 from hand_tracking import ROOT, HandTracker, annotate
 from pipeline import PerceptionPipeline, annotate_instrument
+from audio_engine import AudioEngine
 
 LOG = logging.getLogger('hand-tracking')
 
@@ -65,10 +66,12 @@ class Service:
 
     def run(self):
         cap = None
+        audio = None
         try:
             cv.setNumThreads(4)
             tracker = HandTracker(self.args.palm_threshold, self.args.hand_threshold, mirror=not self.args.no_mirror)
-            pipeline = PerceptionPipeline(hands=tracker)
+            audio = AudioEngine()
+            pipeline = PerceptionPipeline(hands=tracker, audio=audio)
             backends = {'auto': [cv.CAP_DSHOW, cv.CAP_MSMF], 'dshow': [cv.CAP_DSHOW], 'msmf': [cv.CAP_MSMF]}
             frame = None
             for backend in backends[self.args.backend]:
@@ -135,6 +138,8 @@ class Service:
         finally:
             if cap is not None:
                 cap.release()
+            if audio is not None:
+                audio.close()
             self.set_recording(False)
 
 
