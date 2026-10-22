@@ -15,6 +15,7 @@ from instrument_geometry import InstrumentLayout, legacy_packet
 from aruco_tracking import ArucoBoardTracker, TrackingConfig
 from board_definition import BoardDefinition
 from board_calibration import CalibrationSessions
+from instrument_preset import InstrumentPreset
 from instrument_logic import InstrumentLogic, InteractionConfig
 from audio_engine import AudioEngine, MockAudioBackend, SoundDeviceBackend
 from camera_sources import cameras, open_camera
@@ -110,14 +111,16 @@ class Service:
         cap = None
         try:
             cv.setNumThreads(4)
-            layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u')
+            preset = InstrumentPreset.load(self.args.preset) if self.args.preset else InstrumentPreset.default()
+            layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u', preset=preset)
             board = BoardDefinition.load(self.args.board) if self.args.board else None
             tracking = TrackingConfig(hold_s=self.args.board_hold)
             board_tracker = ArucoBoardTracker(board=board, learn_legacy=True, config=tracking)
-            config = InteractionConfig()
+            config_data = dict(preset.interaction)
             if self.args.interaction_config:
                 with open(self.args.interaction_config, encoding='utf-8') as file:
-                    config = InteractionConfig(**json.load(file))
+                    config_data.update(json.load(file))
+            config = InteractionConfig(**config_data)
             if self.args.demo:
                 from synthetic_input import SyntheticHandTracker, board_image
                 tracker = SyntheticHandTracker(mirror=not self.args.no_mirror, layout=layout)
@@ -315,6 +318,7 @@ def build_parser():
     parser.add_argument('--layout', choices=['standard', 'flip-u'], default='standard')
     parser.add_argument('--interaction-config', help='JSON overrides for InteractionConfig thresholds')
     parser.add_argument('--board', help='Physical BoardDefinition JSON; omitted = automatic legacy corner learning')
+    parser.add_argument('--preset', help='InstrumentPreset JSON; default config/presets/guitar.json')
     parser.add_argument('--board-hold', type=float, default=.25, help='Seconds to hold last reliable pose for display')
     parser.add_argument('--audio', choices=['sounddevice', 'mock', 'off'], help='Default sounddevice; demo defaults to mock')
     parser.add_argument('--audio-device', help='Output device index or PortAudio device name')
