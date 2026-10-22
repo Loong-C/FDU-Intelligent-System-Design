@@ -1,3 +1,9 @@
+# Version note (2026-10-22)
+
+This document describes the schema-2 compatibility endpoints. New native endpoints,
+`/api/snapshot` and recordings use schema 3; see [generalized plane API](../generalized/API.md).
+Unversioned `/api/landmarks` and `/api/state` retain schema 2 through an explicit adapter.
+
 # Schema v2 与运行边界
 
 唯一入口 `app.py`，正式模式的数据流：
