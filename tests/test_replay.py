@@ -110,3 +110,33 @@ class RecordingReplayTests(unittest.TestCase):
             manifest = json.loads((full.folder/'manifest.json').read_text())
             self.assertFalse(manifest['complete'])
             self.assertEqual(manifest['dropped_frames'], [{'frame_id': 2001, 'reason': 'queue_full'}])
+
+    def test_optional_real_hand_inference_on_replay(self):
+        with tempfile.TemporaryDirectory() as root:
+            pipeline = PerceptionPipeline(hands=SyntheticHandTracker())
+            raw = board_image()
+            _, p = pipeline.process(raw, 1000., 100000.)
+            recorder = Recorder(root, raw_frames=True)
+            recorder.submit(p, raw, pipeline.configuration())
+            recorder.close()
+            output = Path(root)/'onnx.jsonl'
+            report = replay_recording(recorder.folder, output, rerun_hands=True)
+            replayed = list(json_lines(output))[0]
+            self.assertEqual(replayed['hands'], [])  # Printed markers are not hands.
+            self.assertEqual(replayed['replay_hands'], 'rerun_onnx')
+            self.assertEqual(report['audio']['status'], 'mock')
+
+    def test_service_can_restart_after_a_recording_failure(self):
+        from app import Service, build_parser
+        with tempfile.TemporaryDirectory() as root, patch('app.ROOT', Path(root)):
+            service = Service(build_parser().parse_args(['--demo']))
+            service.set_recording(True)
+            old = service.recording
+            old.error = 'simulated failure'
+            old.stop.set()
+            service.set_recording(True, raw_frames=True)
+            self.assertIsNot(service.recording, old)
+            self.assertTrue(service.recording.raw_frames)
+            self.assertTrue(service.latest()['recording'])
+            service.set_recording(False)
+            self.assertFalse(json.loads((old.folder/'manifest.json').read_text())['complete'])

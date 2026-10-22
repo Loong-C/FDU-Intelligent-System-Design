@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let latest = null, stopped = false, updating = false;
+let recordingPreferenceSet = false;
 const fmt = (n, digits = 1) => Number.isFinite(n) ? n.toFixed(digits) : '—';
 const escapeText = text => String(text).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -86,6 +87,10 @@ function render(data) {
   $('record').textContent = data.recording ? '停止录制' : '开始录制';
   $('record').disabled = !running && !data.recording;
   $('recordVideo').disabled = !!data.recording;
+  if (!recordingPreferenceSet && data.status === 'running') {
+    $('recordVideo').checked = !!data.recording_default_raw_frames;
+    recordingPreferenceSet = true;
+  }
   $('recording').textContent = data.recording ? '● 正在录制'+(data.recording_details?.raw_frames ? '原始图像 + 数据' : '节点数据')+'：'+data.last_recording : data.last_recording ? '录制目录：'+data.last_recording : '默认仅录制节点。勾选实验采集可同步保存原始图像。';
   $('frameInfo').textContent = 'F'+(data.frame_id || 0)+' · '+(data.frame_width || 0)+'×'+(data.frame_height || 0)+' · '+(data.mirrored ? '镜像' : '原始');
   const old = $('selectHand').value;

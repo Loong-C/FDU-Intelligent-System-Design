@@ -6,7 +6,6 @@ import json
 import logging
 import threading
 import time
-from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 import cv2 as cv
@@ -57,17 +56,18 @@ class Service:
         with self.record_control:
             with self.lock:
                 old = None
-                if enabled and self.recording is None:
-                    self.recording = Recorder(ROOT / 'outputs', raw_frames=self.args.record_video if raw_frames is None else raw_frames,
-                                              metadata={'source': self.camera_name, 'schema_version': 3})
-                    self.last_recording = str(self.recording.folder)
-                    self.recording_error = None
-                elif not enabled and self.recording is not None:
+                if self.recording is not None and (not enabled or self.recording.stop.is_set() or self.recording.error):
                     old, self.recording = self.recording, None
             if old is not None:
                 old.close()
                 with self.lock:
                     self.recording_error = old.error
+            with self.lock:
+                if enabled and self.recording is None:
+                    self.recording = Recorder(ROOT / 'outputs', raw_frames=self.args.record_video if raw_frames is None else raw_frames,
+                                              metadata={'source': self.camera_name, 'schema_version': 3})
+                    self.last_recording = str(self.recording.folder)
+                    self.recording_error = None
 
     def latest(self, schema_version=2):
         with self.lock:
@@ -77,6 +77,7 @@ class Service:
                           camera_index=self.index, camera_backend=self.backend_name, available_cameras=self.device_list)
             result['recording_details'] = self.recording.snapshot() if self.recording else None
             result['calibrating'] = self.calibrating
+            result['recording_default_raw_frames'] = self.args.record_video
             if self.audio is not None:
                 result['audio'] = self.audio.snapshot()
                 result['audio_status'] = result['audio']['status']
@@ -118,7 +119,13 @@ class Service:
             preset = InstrumentPreset.load(self.args.preset) if self.args.preset else InstrumentPreset.default()
             layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u', preset=preset)
             board = BoardDefinition.load(self.args.board) if self.args.board else None
-            tracking = TrackingConfig(hold_s=self.args.board_hold)
+            tracking_data = {}
+            if self.args.tracking_config:
+                with open(self.args.tracking_config, encoding='utf-8') as file:
+                    tracking_data.update(json.load(file))
+            if self.args.board_hold is not None:
+                tracking_data['hold_s'] = self.args.board_hold
+            tracking = TrackingConfig(**tracking_data)
             board_tracker = ArucoBoardTracker(board=board, learn_legacy=True, config=tracking)
             config_data = dict(preset.interaction)
             if self.args.interaction_config:
@@ -290,6 +297,8 @@ def handler_for(service):
                     if not 0 <= length <= 1024:
                         raise ValueError('Recording request too large')
                     body = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        raise ValueError('Expected a JSON object')
                     raw_frames = body.get('raw_frames', service.args.record_video)
                     if not isinstance(raw_frames, bool):
                         raise ValueError('raw_frames must be true or false')
@@ -329,7 +338,8 @@ def build_parser():
     parser.add_argument('--interaction-config', help='JSON overrides for InteractionConfig thresholds')
     parser.add_argument('--board', help='Physical BoardDefinition JSON; omitted = automatic legacy corner learning')
     parser.add_argument('--preset', help='InstrumentPreset JSON; default config/presets/guitar.json')
-    parser.add_argument('--board-hold', type=float, default=.25, help='Seconds to hold last reliable pose for display')
+    parser.add_argument('--board-hold', type=float, help='Seconds to hold last reliable pose for display; default .25')
+    parser.add_argument('--tracking-config', help='JSON overrides for TrackingConfig quality thresholds')
     parser.add_argument('--audio', choices=['sounddevice', 'mock', 'off'], help='Default sounddevice; demo defaults to mock')
     parser.add_argument('--audio-device', help='Output device index or PortAudio device name')
     parser.add_argument('--record-video', action='store_true', help='Default recording mode includes lossless raw PNG frames')

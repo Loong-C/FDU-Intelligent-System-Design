@@ -122,7 +122,7 @@ class TrackingConfig:
     recovery_s: float = .10
 
     def __post_init__(self):
-        if not all(np.isfinite(v) and v > 0 for v in vars(self).values()):
+        if not all(np.isfinite(v) and (v >= 0 if k == 'hold_s' else v > 0) for k, v in vars(self).items()):
             raise ValueError('Tracking thresholds must be finite and positive')
         if self.min_inlier_ratio > 1 or self.min_coverage > 1 or self.min_spread_ratio > 1:
             raise ValueError('Tracking ratios must not exceed 1')
@@ -144,7 +144,7 @@ class ArucoBoardTracker:
                  board=None, learn_legacy=False, config=None):
         self.config = config or TrackingConfig(hold_s=hold_s, min_hull_area_px=min_area_px)
         self.clock, self.board, self.learn_legacy = clock, board, learn_legacy
-        self.legacy = LegacyArucoBoardTracker(hold_s, min_area_px, clock, detector)
+        self.legacy = LegacyArucoBoardTracker(self.config.hold_s, min_area_px, clock, detector)
         if detector is None and board is not None:
             parameters = cv.aruco.DetectorParameters()
             parameters.cornerRefinementMethod = cv.aruco.CORNER_REFINE_SUBPIX
@@ -192,7 +192,13 @@ class ArucoBoardTracker:
         if self.learn_legacy and result['status'] == 'valid':
             mapping = {m['id']: {'corners_uv': project(m['corners_px_raw'], self.last_valid_H).tolist()}
                        for m in result['markers'] if m['id'] in REQUIRED_IDS}
-            self.board = BoardDefinition('legacy_learned', mapping, metadata={'method': 'legacy_center_bootstrap'})
+            try:
+                self.board = BoardDefinition('legacy_learned', mapping, metadata={'method': 'legacy_center_bootstrap'})
+            except ValueError:
+                self.reset()
+                result.update(status='lost', reason='invalid_legacy_corner_geometry',
+                              homography_camera_to_instrument=None, homography_instrument_to_camera=None,
+                              homography_age_s=None)
         result['tracking_mode'] = 'legacy_bootstrap' if self.learn_legacy else 'legacy_strict'
         result['board_id'] = 'legacy'
         result['pose_quality'] = dict(status=result['status'], reason=result['reason'],
@@ -235,7 +241,7 @@ class ArucoBoardTracker:
                 usable[marker_id] = p
         visible = sorted(set(counts) & set(board.markers))
         q = dict(status='lost', visible_marker_count=len(visible), correspondence_count=0,
-                 inlier_count=0, inlier_ratio=0., inlier_marker_count=0, reprojection_rmse_px=None,
+                 inlier_count=0, inlier_ratio=0., ransac_inlier_count=0, inlier_marker_count=0, reprojection_rmse_px=None,
                  coverage_ratio=0., spread_ratio=0., normalized_condition=None, age_s=None, reason=None)
         H = inverse = None
         reason = 'missing_or_too_small_markers'
@@ -262,6 +268,7 @@ class ArucoBoardTracker:
                     if inverse is None or mask is None:
                         raise ValueError('homography_fit_failed')
                     mask = mask.ravel().astype(bool)
+                    q['ransac_inlier_count'] = int(mask.sum())
                     # Reject partially supported markers as units; do not fit a board from accidental corners.
                     complete = mask.reshape(-1, 4).all(axis=1)
                     mask = np.repeat(complete, 4)

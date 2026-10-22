@@ -11,7 +11,7 @@
 <section class="layout">
 <div class="performance">
 <div class="section-label"><span>01 / 实时演奏</span><span id="frameInfo">等待画面</span></div>
-<div class="stage"><img id="video" alt="同帧手部骨架、Marker 和乐器区域叠加画面"><div id="waiting" class="waiting"><span class="eyebrow">MOTIONMUSE</span><h2>等待画面</h2><p id="waitMessage">启动本地服务后，将贴有四个标记的刚性板放入画面。</p></div></div>
+<div class="stage"><img id="video" alt="同帧手部骨架、Marker 和乐器区域叠加画面"><div id="waiting" class="waiting"><span class="eyebrow">MOTIONMUSE</span><h2>等待画面</h2><p id="waitMessage">启动本地服务后，将贴有标记的刚性平板放入画面。</p></div></div>
 <div class="metrics"><div><small>处理速度</small><strong id="fps">—</strong><span>FPS</span></div><div><small>手部推理</small><strong id="latency">—</strong><span>ms</span></div><div><small>板面定位</small><strong id="arucoMs">—</strong><span>ms</span></div><div><small>视觉合计</small><strong id="totalMs">—</strong><span>ms</span></div></div>
 <div class="chord-strip" id="chordStrip" aria-label="和弦选择区域"></div><p class="hint">左手在和弦区停留约 100 ms，右手食指跨过扫弦带中线。板子暂时遮挡时暂停演奏。</p>
 </div>
@@ -30,7 +30,7 @@
 </aside>
 </section>
 <section class="lower">
-<div class="guide"><div class="section-label">03 / 持板准备</div><div class="guide-content"><div class="marker-layout" aria-label="标记顺序，上排 0 1，下排 2 3"><b>0</b><b>1</b><span>同一刚性平面</span><b>2</b><b>3</b></div><div><h2>四个标记，一套坐标。</h2><p>DICT_4X4_50 · 保留白边，中心固定且共面。绿色区域选和弦，琥珀色区域扫弦。</p><p>UV 表示二维投影，不代表手指接触板面。布局朝向不合适时，用 <code>--layout flip-u</code> 翻转区域。</p></div></div></div>
+<div class="guide"><div class="section-label">03 / 持板准备</div><div class="guide-content"><div class="marker-layout" aria-label="旧版免标定布局，上排 0 1，下排 2 3"><b>0</b><b>1</b><span>旧版免标定布局</span><b>2</b><b>3</b></div><div><h2>自由贴标，一次标定。</h2><p>DICT_4X4_50 · 不同 ID 分散贴在同一刚性平面，保留白边，可自由旋转。点击“板面标定”建立坐标；绿色区域选和弦，琥珀色区域扫弦。</p><p>UV 表示二维投影，不代表手指接触板面。可用 <code>--preset</code> 加载演奏区域，用 <code>--layout flip-u</code> 翻转区域。</p></div></div></div>
 <div class="events"><div class="section-label">04 / 事件记录 <span>仅展示，不重播</span></div><ol id="events"><li>尚无扫弦事件</li></ol></div>
 </section>
 <details id="debug"><summary>调试面板 <span>21 点坐标 · 局部三维投影 · 原始 API</span></summary><div class="debug-body">

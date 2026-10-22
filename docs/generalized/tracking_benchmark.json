@@ -1,0 +1,25 @@
+{
+  "platform": "Windows-11-10.0.26100-SP0",
+  "python": "3.12.9",
+  "opencv": "4.12.0",
+  "numpy": "2.2.6",
+  "iterations": 300,
+  "opencv_threads": 4,
+  "input": "synthetic raster images, no camera or hand inference",
+  "jetson": "NOT TESTED",
+  "results": {
+    "legacy_four_centers": {
+      "p50_ms": 1.5246497932821512,
+      "p95_ms": 1.9941602600738408
+    },
+    "joint_four_markers": {
+      "p50_ms": 1.7482500988990068,
+      "p95_ms": 2.2889548679813743
+    },
+    "joint_six_markers_960x720": {
+      "p50_ms": 2.5395003613084555,
+      "p95_ms": 3.211265103891492
+    }
+  },
+  "same_input_overhead_p50_ms": 0.22360030561685562
+}

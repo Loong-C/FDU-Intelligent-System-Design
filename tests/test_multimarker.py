@@ -96,3 +96,29 @@ class MultiMarkerTests(unittest.TestCase):
         compact = BoardDefinition('thin', tiny)
         result = ArucoBoardTracker(board=compact).process(render_board(compact), 0)
         self.assertNotEqual(result['status'], 'valid')
+
+    def test_twelve_registered_markers_and_extreme_perspective(self):
+        markers = {}
+        for i in range(12):
+            x, y = .1+(i % 4)*.25, .12+(i//4)*.35
+            markers[str(i)] = {'corners_uv': [[x, y], [x+.08, y], [x+.08, y+.08], [x, y+.08]]}
+        board = BoardDefinition('twelve', markers)
+        result = ArucoBoardTracker(board=board).process(render_board(board), 0.)
+        self.assertEqual(result['status'], 'valid')
+        self.assertEqual(result['pose_quality']['correspondence_count'], 48)
+        inverse = np.array([[500., 0, 100], [0, 500, 100], [-1.1, 0, 1]])
+        detector = Mock()
+        detector.detectMarkers.return_value = ([np.float32(project(v['corners_uv'], inverse)).reshape(1, 4, 2)
+                                                for v in board.markers.values()], np.arange(12).reshape(-1, 1), [])
+        result = ArucoBoardTracker(board=board, detector=detector).process(np.zeros((720, 960, 3), np.uint8), 0.)
+        self.assertNotEqual(result['status'], 'valid')
+        self.assertIsNotNone(result['reason'])
+
+    def test_legacy_bootstrap_rejects_degenerate_corners_without_crashing(self):
+        detector = Mock()
+        detector.detectMarkers.return_value = ([np.full((1, 4, 2), p, np.float32) for p in
+                                                ([100, 100], [500, 100], [100, 400], [500, 400])],
+                                               np.arange(4).reshape(-1, 1), [])
+        result = ArucoBoardTracker(detector=detector, learn_legacy=True).process(marker_image(), 0.)
+        self.assertEqual(result['status'], 'lost')
+        self.assertEqual(result['reason'], 'invalid_legacy_corner_geometry')
