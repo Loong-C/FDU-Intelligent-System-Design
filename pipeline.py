@@ -5,13 +5,15 @@ import numpy as np
 from aruco_tracking import ArucoBoardTracker
 from hand_tracking import HandTracker, annotate
 from instrument_geometry import InstrumentLayout, fuse_hands, overlay_polygons, raw_to_display_xy
+from instrument_logic import InstrumentLogic
 
 
 class PerceptionPipeline:
-    def __init__(self, hands=None, board=None, layout=None):
+    def __init__(self, hands=None, board=None, layout=None, logic=None):
         self.hands = hands if hands is not None else HandTracker()
         self.board = board if board is not None else ArucoBoardTracker()
         self.layout = layout or InstrumentLayout()
+        self.logic = logic if logic is not None else InstrumentLogic(self.layout)
 
     def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None):
         captured = time.time() if timestamp_unix_s is None else timestamp_unix_s
@@ -23,6 +25,7 @@ class PerceptionPipeline:
         fuse_hands(packet, instrument)
         packet.update(timestamp_monotonic_s=mono, status='running', layout=self.layout.regions(),
                       vision_total_ms=round((time.perf_counter() - started) * 1000, 3))
+        packet['interaction'], packet['events'] = self.logic.process(packet)
         return display, packet
 
 
