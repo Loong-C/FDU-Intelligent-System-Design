@@ -85,7 +85,8 @@ function render(data) {
   $('error').textContent = [data.error, audio.error, data.recording_error].filter(Boolean).join(' · ');
   $('record').textContent = data.recording ? '停止录制' : '开始录制';
   $('record').disabled = !running && !data.recording;
-  $('recording').textContent = data.recording ? '● 正在录制：'+data.last_recording : data.last_recording ? '已保存：'+data.last_recording : '录制节点、板面和事件；不保存视频。';
+  $('recordVideo').disabled = !!data.recording;
+  $('recording').textContent = data.recording ? '● 正在录制'+(data.recording_details?.raw_frames ? '原始图像 + 数据' : '节点数据')+'：'+data.last_recording : data.last_recording ? '录制目录：'+data.last_recording : '默认仅录制节点。勾选实验采集可同步保存原始图像。';
   $('frameInfo').textContent = 'F'+(data.frame_id || 0)+' · '+(data.frame_width || 0)+'×'+(data.frame_height || 0)+' · '+(data.mirrored ? '镜像' : '原始');
   const old = $('selectHand').value;
   const options = data.hands.map(h=>'<option value="'+h.track_id+'">'+h.handedness+' #'+h.track_id+'</option>').join('');
@@ -128,7 +129,7 @@ $('debug').ontoggle = () => {if (latest && $('debug').open) {renderTable(); draw
 $('record').onclick = async () => {
   try {
     $('record').disabled = true;
-    const r = await fetch('/api/record/'+(latest?.recording ? 'stop' : 'start'), {method:'POST'});
+    const r = await fetch('/api/record/'+(latest?.recording ? 'stop' : 'start'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({raw_frames:$('recordVideo').checked})});
     if (!r.ok) throw Error(await r.text());
     render(await r.json());
   } catch (e) {$('error').textContent = e.message; $('record').disabled = false;}

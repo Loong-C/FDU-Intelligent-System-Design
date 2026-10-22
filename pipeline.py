@@ -1,6 +1,7 @@
 """Single-frame orchestration; camera ownership stays in app.Service."""
 import time
 from collections import deque
+from dataclasses import asdict
 import cv2 as cv
 import numpy as np
 from aruco_tracking import ArucoBoardTracker
@@ -19,15 +20,22 @@ class PerceptionPipeline:
         self.audio = audio
         self.recent_events = deque(maxlen=32)
 
+    def configuration(self):
+        return dict(board=self.board.board.to_dict() if self.board.board else None,
+                    tracking=asdict(self.board.config), preset=self.layout.preset.to_dict(),
+                    flip_u=self.layout.flip_u, interaction=asdict(self.logic.config))
+
     def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None, interaction_enabled=True):
         captured = time.time() if timestamp_unix_s is None else timestamp_unix_s
         mono = monotonic_s() if timestamp_monotonic_s is None else timestamp_monotonic_s
         started = time.perf_counter()
         display, packet = self.hands.process(raw_frame, captured)
+        previous_pose = self.board.export_state()
         instrument = self.board.process(raw_frame, mono)
         instrument['source_frame_id'] = packet['frame_id']
         fuse_hands(packet, instrument)
         packet.update(timestamp_monotonic_s=mono, status='running', layout=self.layout.regions(),
+                      tracking_previous_state=previous_pose,
                       vision_total_ms=round((time.perf_counter() - started) * 1000, 3))
         if interaction_enabled:
             packet['interaction'], packet['events'] = self.logic.process(packet)

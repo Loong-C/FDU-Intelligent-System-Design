@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 import time
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 import cv2 as cv
@@ -51,13 +52,14 @@ class Service:
                             next((c['name'] for c in self.device_list if c['index'] == self.index), str(self.index)))
         self.worker = threading.Thread(target=self.run, name='single-camera-worker', daemon=True)
 
-    def set_recording(self, enabled):
+    def set_recording(self, enabled, raw_frames=None):
         # Serialize control requests, but drain files outside the snapshot/camera lock.
         with self.record_control:
             with self.lock:
                 old = None
                 if enabled and self.recording is None:
-                    self.recording = Recorder(ROOT / 'outputs')
+                    self.recording = Recorder(ROOT / 'outputs', raw_frames=self.args.record_video if raw_frames is None else raw_frames,
+                                              metadata={'source': self.camera_name, 'schema_version': 3})
                     self.last_recording = str(self.recording.folder)
                     self.recording_error = None
                 elif not enabled and self.recording is not None:
@@ -73,6 +75,8 @@ class Service:
                           recording_error=self.recording.error if self.recording else self.recording_error,
                           last_recording=self.last_recording, camera_name=self.camera_name,
                           camera_index=self.index, camera_backend=self.backend_name, available_cameras=self.device_list)
+            result['recording_details'] = self.recording.snapshot() if self.recording else None
+            result['calibrating'] = self.calibrating
             if self.audio is not None:
                 result['audio'] = self.audio.snapshot()
                 result['audio_status'] = result['audio']['status']
@@ -92,7 +96,7 @@ class Service:
             self.packet, self.jpeg = packet, encoded.tobytes()
             self.raw_frame = None if raw_frame is None else raw_frame.copy()
             if self.recording is not None:
-                self.recording.submit(packet)
+                self.recording.submit(packet, raw_frame, self.pipeline.configuration() if self.pipeline else None)
 
     def fail_frame(self, message):
         with self.lock:
@@ -159,16 +163,15 @@ class Service:
                     self.calibrating = self.calibration.active()
                     display, packet = self.pipeline.process(frame, captured, mono, interaction_enabled=not self.calibrating)
                     packet.setdefault('source', 'video' if self.args.video else 'camera')
-                if audio_mode == 'mock' and self.audio.status == 'mock':
-                    backend.pump()
-                    packet['audio'] = self.audio.snapshot()
-                    packet['audio_status'] = packet['audio']['status']
-                now = time.perf_counter()
-                instant = 1/max(now-previous, .0001)
-                fps = instant if not fps else .9*fps + .1*instant
-                previous = now
-                packet.update(fps=round(fps, 1))
-                with self.pipeline_lock:
+                    if audio_mode == 'mock' and self.audio.status == 'mock':
+                        backend.pump()
+                        packet['audio'] = self.audio.snapshot()
+                        packet['audio_status'] = packet['audio']['status']
+                    now = time.perf_counter()
+                    instant = 1/max(now-previous, .0001)
+                    fps = instant if not fps else .9*fps + .1*instant
+                    previous = now
+                    packet.update(fps=round(fps, 1))
                     self.publish(annotate_instrument(display, packet, layout), packet, frame)
                 if self.args.demo:
                     self.stop.wait(1/30)
@@ -283,7 +286,14 @@ def handler_for(service):
                     if service.latest()['status'] != 'running':
                         self.send(409, b'Camera not running', 'text/plain')
                         return
-                    service.set_recording(True)
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 <= length <= 1024:
+                        raise ValueError('Recording request too large')
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                    raw_frames = body.get('raw_frames', service.args.record_video)
+                    if not isinstance(raw_frames, bool):
+                        raise ValueError('raw_frames must be true or false')
+                    service.set_recording(True, raw_frames)
                 elif path == '/api/record/stop':
                     service.set_recording(False)
                 elif path == '/api/shutdown':
@@ -322,6 +332,7 @@ def build_parser():
     parser.add_argument('--board-hold', type=float, default=.25, help='Seconds to hold last reliable pose for display')
     parser.add_argument('--audio', choices=['sounddevice', 'mock', 'off'], help='Default sounddevice; demo defaults to mock')
     parser.add_argument('--audio-device', help='Output device index or PortAudio device name')
+    parser.add_argument('--record-video', action='store_true', help='Default recording mode includes lossless raw PNG frames')
     parser.add_argument('--duration', type=float, help='Optional bounded processing duration in seconds')
     parser.add_argument('--palm-threshold', type=float, default=.6)
     parser.add_argument('--hand-threshold', type=float, default=.8)

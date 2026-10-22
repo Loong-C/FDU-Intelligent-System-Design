@@ -158,6 +158,32 @@ class ArucoBoardTracker:
         self.pending = None
         self.legacy.reset()
 
+    def export_state(self):
+        return dict(last_valid_H=None if self.last_valid_H is None else self.last_valid_H.tolist(),
+                    last_valid_inverse=None if self.last_valid_inverse is None else self.last_valid_inverse.tolist(),
+                    last_valid_mono_time=self.last_valid_mono_time, last_time=self.last_time,
+                    pending=None if self.pending is None else [self.pending[0].tolist(), self.pending[1], self.pending[2]])
+
+    def restore_state(self, state, time_offset=0.):
+        """Seed only the beginning of a replay, including a recording begun during occlusion."""
+        self.reset()
+        for name in ('last_valid_H', 'last_valid_inverse'):
+            value = state.get(name)
+            if value is not None:
+                value = np.asarray(value, dtype=float)
+                if value.shape != (3, 3) or not np.isfinite(value).all():
+                    raise ValueError('Invalid replay transform state')
+                setattr(self, name, value)
+        for name in ('last_valid_mono_time', 'last_time'):
+            value = state.get(name)
+            if value is not None:
+                if not np.isfinite(value):
+                    raise ValueError('Invalid replay clock state')
+                setattr(self, name, value+time_offset)
+        if state.get('pending') is not None:
+            p, t, n = state['pending']
+            self.pending = (np.asarray(p, dtype=float), t+time_offset, n)
+
     def _legacy_process(self, frame, now):
         result = self.legacy.process(frame, now)
         self.last_valid_H = self.legacy.last_valid_H
