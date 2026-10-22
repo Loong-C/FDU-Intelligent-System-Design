@@ -66,4 +66,7 @@ def annotate_instrument(display, packet, layout):
                        cv.FONT_HERSHEY_SIMPLEX, .6, color, 2, cv.LINE_AA)
     label = f"Board: {board['status']} | chord: {state.get('current_chord') or '-'}"
     cv.putText(canvas, label, (12, 24), cv.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 2, cv.LINE_AA)
+    if packet.get('source') == 'synthetic':
+        cv.putText(canvas, 'SIMULATION / scripted hands', (15, canvas.shape[0]-12),
+                   cv.FONT_HERSHEY_SIMPLEX, .45, (180, 220, 200), 1, cv.LINE_AA)
     return canvas
