@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import cv2 as cv
 from cv2_enumerate_cameras import enumerate_cameras
 from hand_tracking import ROOT, HandTracker, annotate
+from pipeline import PerceptionPipeline, annotate_instrument
 
 LOG = logging.getLogger('hand-tracking')
 
@@ -47,7 +48,8 @@ class Service:
                 writer = csv.writer(csv_file)
                 writer.writerow(['frame_id', 'timestamp_unix_s', 'track_id', 'handedness', 'confidence',
                                  'node_id', 'node_name', 'x_px', 'y_px', 'z_relative_px',
-                                 'x_normalized', 'y_normalized', 'z_normalized', 'world_x_m', 'world_y_m', 'world_z_m'])
+                                 'x_normalized', 'y_normalized', 'z_normalized', 'world_x_m', 'world_y_m', 'world_z_m',
+                                 'instrument_u', 'instrument_v'])
                 self.recording = (json_file, csv_file, writer, str(folder))
                 self.last_recording = str(folder)
             elif not enabled and self.recording:
@@ -66,6 +68,7 @@ class Service:
         try:
             cv.setNumThreads(4)
             tracker = HandTracker(self.args.palm_threshold, self.args.hand_threshold, mirror=not self.args.no_mirror)
+            pipeline = PerceptionPipeline(hands=tracker)
             backends = {'auto': [cv.CAP_DSHOW, cv.CAP_MSMF], 'dshow': [cv.CAP_DSHOW], 'msmf': [cv.CAP_MSMF]}
             frame = None
             for backend in backends[self.args.backend]:
@@ -91,6 +94,7 @@ class Service:
             while not self.stop.is_set():
                 ok, frame = cap.read()
                 captured = time.time()
+                captured_mono = time.monotonic()
                 if not ok or frame is None:
                     failed += 1
                     with self.lock:
@@ -101,13 +105,13 @@ class Service:
                     self.stop.wait(.1)
                     continue
                 failed = 0
-                display, packet = tracker.process(frame, captured)
+                display, packet = pipeline.process(frame, captured, captured_mono)
                 now = time.perf_counter()
                 instant = 1 / max(now - previous, .0001)
                 fps = instant if not fps else .9 * fps + .1 * instant
                 previous = now
                 packet.update(status='running', fps=round(fps, 1))
-                ok, encoded = cv.imencode('.jpg', annotate(display, packet), [cv.IMWRITE_JPEG_QUALITY, 85])
+                ok, encoded = cv.imencode('.jpg', annotate_instrument(display, packet, pipeline.layout), [cv.IMWRITE_JPEG_QUALITY, 85])
                 if not ok:
                     raise RuntimeError('JPEG encoding failed')
                 with self.lock:
@@ -119,7 +123,8 @@ class Service:
                             for i, name in enumerate(packet['landmark_names']):
                                 writer.writerow([packet['frame_id'], captured, hand['track_id'], hand['handedness'],
                                                  hand['confidence'], i, name, *hand['landmarks_px'][i],
-                                                 *hand['landmarks_normalized'][i], *hand['landmarks_world_m'][i]])
+                                                 *hand['landmarks_normalized'][i], *hand['landmarks_world_m'][i],
+                                                 *(hand['landmarks_instrument_uv'][i] if hand['landmarks_instrument_uv'] else ['', ''])])
                         jf.flush()
                         cf.flush()
         except Exception as exc:
@@ -151,7 +156,7 @@ def handler_for(service):
             try:
                 if path == '/':
                     self.send(200, (ROOT / 'web/index.html').read_bytes(), 'text/html; charset=utf-8')
-                elif path == '/api/landmarks':
+                elif path in ('/api/landmarks', '/api/state'):
                     self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
                 elif path == '/frame.jpg':
                     with service.lock:
