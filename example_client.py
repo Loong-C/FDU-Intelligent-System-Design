@@ -16,6 +16,10 @@ def main():
             for hand in packet['hands']:
                 fingertip = hand['landmarks_normalized'][8]
                 print(packet['frame_id'], hand['handedness'], hand['track_id'], 'index tip:', fingertip)
+                uv = hand.get('landmarks_instrument_uv')
+                if uv is not None:
+                    print('  board uv:', uv[8], 'board:', packet['instrument']['status'],
+                          'chord:', packet.get('interaction', {}).get('current_chord'))
         time.sleep(.02)
 
 

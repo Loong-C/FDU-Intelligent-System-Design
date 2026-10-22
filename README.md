@@ -1,100 +1,112 @@
-# OpenCV Zoo 手部节点实验台
+# MotionMuse 幻奏 · FDU 智能系统设计
 
-本项目基于 OpenCV Zoo 的手掌检测与手部关键点模型，首次验证使用 Logitech C270。原始本地部署位置为 `D:\智能系统`，也支持克隆到其他目录。完成摄像头采集、双手关键点提取、骨架可视化和节点数据导出。本阶段不包含音高映射、拨弦判定或音频合成。
+本地视觉乐器：**OpenCV Zoo 双手检测 → ArUco 板面坐标 → 左手 C/G/Am/F 和弦 → 右手上下扫事件 → 本地音频**。浏览器显示同帧骨架、板面、演奏状态和性能，支持 JSONL/CSV 录制。
 
-## 首次安装
+一个摄像头、一个手部推理后端和一个动作状态机。核心运行无需外网，浏览器不运行 MediaPipe JS。保留 A 的 ONNX、包装类、启动脚本、原回归和 HTTP 路径。两源版本、署名、文件归属见 [BASELINE](docs/integration/BASELINE.md)。
+
+**验证边界：** Windows Python 3.12 自动化、真实 ONNX 照片回归、合成演奏闭环和 PortAudio 输出流已验证。真人持板/物理摄像头、人工听感和 Jetson 实机验收尚未完成，见 [测试报告](docs/integration/TEST_REPORT.md)。合成演示不是硬件性能基准。
+
+## Windows 首次安装
 
 ```powershell
-git clone https://github.com/Kasansia/FDU-Intelligent-System-Design.git
+git clone https://github.com/Loong-C/FDU-Intelligent-System-Design.git
 cd FDU-Intelligent-System-Design
+git switch integration/motionmuse
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 .\start.cmd
 ```
 
-需要 Windows 和 Python 3.12。仓库包含完整 ONNX 模型、所需官方包装类及许可证，无需 Git LFS 或子模块。`setup.ps1` 建立虚拟环境、安装依赖并校验模型。已安装的本机可以直接启动。
+需要 Python 3.12（PATH 或 py 启动器登记）。setup 仅在项目 `.venv` 安装依赖并验证两份 ONNX SHA-256。PC 固定 OpenCV 4.12.0.88 / NumPy 2.2.6；此 wheel 已有 ArUco，不再安装 contrib。音频新增 sounddevice 0.5.3。
 
-## 启动和停止
-
-双击 **start.cmd**，打开 <http://127.0.0.1:8765/>。默认优先选择 **Logi C270 HD WebCam**；服务仅监听本机，不上传画面或节点。
-
-本机 C270 的 DirectShow 后端打不开，程序会自动改用 MSMF（Media Foundation）。首次启动约需 30 秒；等待界面显示“本地实时运行”。C270 已完成 640×480 实时双手识别验证。
-
-- 绿色骨架是左手，橙色骨架是右手；各 21 个点，编号 0–20。
-- 下方表格可选择手部，查看逐节点数值。
-- “开始录制节点 / 停止录制”输出 `outputs/日期_时间/landmarks.jsonl` 和 `landmarks.csv`，不录制视频。
-- “停止摄像头”会结束本地服务、释放设备。**关闭网页不会停止后台服务**。
-- 也可执行 `powershell -ExecutionPolicy Bypass -File .\stop.ps1` 停止。
-- 重新双击 start.cmd 恢复。默认不录制，不会开机自启。
-
-命令行启动（前台日志，Ctrl+C 停止）：
+打开 [本地演奏台](http://127.0.0.1:8765/)。默认镜像、640×480，优先 C270，Windows 依次尝试 DSHOW/MSMF。虚拟相机会参与枚举，应选择实际设备。
 
 ```powershell
-cd D:\智能系统
-.\.venv\Scripts\python.exe app.py --camera 1 --backend msmf
-```
-
-其他命令：
-
-```powershell
-# 查看 DirectShow 设备索引（重新插拔后索引可能变化）
 .\.venv\Scripts\python.exe app.py --list-cameras
-# USB Camera，本机当前索引为 0；请先停止正在运行的服务
-.\.venv\Scripts\python.exe app.py --camera 0 --backend dshow
-# 关闭镜像显示与推理；左右手标签会相应修正
+.\.venv\Scripts\python.exe app.py --camera 0 --backend msmf
 .\.venv\Scripts\python.exe app.py --no-mirror
 ```
 
-## 后续乐器项目的数据接口
+`start.cmd` 继续调用 `start.ps1` 在后台启动并打开浏览器。关闭网页不会停服务；点击“停止服务”、Ctrl+C（前台）或执行 `powershell -ExecutionPolicy Bypass -File .\stop.ps1` 释放设备。日志：`outputs/server.stderr.log`。
 
-`GET http://127.0.0.1:8765/api/landmarks` 获取最新一帧的 JSON。摄像头只由后台采集一次；后续程序使用此接口，或直接复用 `hand_tracking.HandTracker.process(bgr_frame)`。
+## 打印和演奏
 
-运行 `.\.venv\Scripts\python.exe example_client.py` 可以持续读取食指尖坐标，Ctrl+C 结束客户端。
+```powershell
+.\.venv\Scripts\python.exe generate_markers.py
+```
 
-| 字段 | 含义 |
-| --- | --- |
-| `schema_version` | 当前为 1 |
-| `status` | starting / running / error |
-| `frame_id` | 本次运行的递增处理帧号；重启归零 |
-| `timestamp_unix_s` | 摄像头帧读取完成时的 Unix 秒时间戳 |
-| `frame_width`, `frame_height` | 实际图像尺寸 |
-| `mirrored` | 默认 true；推理、骨架和导出的二维坐标都基于镜像帧 |
-| `hands` | 本帧检测结果；无手时为空数组，最多两只手 |
-| `hands[].track_id` | 基于手腕距离的短时空间关联 ID |
-| `hands[].handedness` | Left / Right，模型估计的解剖学左右手 |
-| `hands[].handedness_score` | 左右手分类置信度 |
-| `hands[].confidence` | 整只手的存在置信度，不是逐节点置信度 |
-| `hands[].landmarks_px` | 21×3，x/y 为像素，z 为相对手腕的模型深度值，按图像尺度缩放 |
-| `hands[].landmarks_normalized` | 21×3，x/宽、y/高、z/宽 |
-| `hands[].landmarks_world_m` | 21×3，模型估计的手部局部三维坐标，单位米，原点约在手部几何中心 |
-| `landmark_names`, `connections` | 节点名和骨架连接关系 |
+打印 `outputs/markers/marker_0.png` 至 `marker_3.png`，保留白边，不镜像打印。四个中心固定在同一刚性平板：
 
-二维坐标原点在左上，x 向右、y 向下；边缘外预测可能小于 0 或大于 1，不进行截断。z 越小通常表示越靠近摄像头，**不是手到摄像头的距离**。世界坐标也不是经相机/板子标定的场景绝对坐标；不同手的局部原点不能直接用于测量双手间距离。
+```text
+ID 0 ---------------- ID 1
+          交互平面
+ID 2 ---------------- ID 3
+```
 
-后续动作判断应只消费 `status == running`、时间戳足够新、`frame_id` 未重复的包，使用时间戳计算速度。示例客户端采用 0.5 秒过期阈值。HTTP 返回最新帧，低频轮询可能跳帧；JSONL 录制包含每个处理帧（包括空手帧），CSV 每帧每只手每节点一行，无手帧没有 CSV 节点行。
+让四个 Marker 完整进入画面，确认 **VALID**。解剖学左手放在 C/G/Am/F 区域，驻留约 100 ms；右手食指从扫弦中线上方穿到下方发下扫，反向发上扫。四和弦采用区域选择，不是真实吉他指法识别。音色为代码生成的测试音色，可衰减重叠；不是最终吉他采样。
 
-节点编号：0 手腕；1–4 拇指；5–8 食指；9–12 中指；13–16 无名指；17–20 小指。指尖为 4 / 8 / 12 / 16 / 20。
+默认和弦区 u=.04–.60，扫弦区 u=.68–.90。朝向不合适时用 `--layout flip-u` 翻转区域，**不交换左右手标签**。短时遮挡最多保持 .25 秒供显示；HELD/LOST 或缺少新鲜左手时均不发新音符。重获后重新驻留、观察扫弦一侧。
 
-目前保留原始关键点，不做平滑、不推测遮挡后运动。track_id 使用 0.5 秒失踪保留和 0.2 归一化距离门限；交叉、遮挡、快速移动时可能换 ID，不应将它视为永久身份。握板时遮挡关键点仍会降低可靠性；板子坐标标定、滤波和动作判定留待下一阶段。
+UV 是二维成像投影，不表示手指接触板面。原模型 z/world_m 是手部局部估计，不是到板子的厘米距离。
 
-## 文件与环境
+## 音频检查与无摄像头演练
 
-- `app.py`：摄像头线程、本地 HTTP 服务、录制。
-- `hand_tracking.py`：官方模型调用、输出结构、短时 ID 关联、绘制。
-- `web/index.html`：实时可视化、二维节点表、XY/XZ 三维投影。
-- `models/`：两份完整的浮点 ONNX 模型。
-- `vendor/opencv_zoo_runtime/`：项目所需官方源代码、来源说明及 Apache-2.0 许可证。
-- `requirements.txt`：固定 OpenCV 4.12.0.88 / NumPy 2.2.6 / cv2-enumerate-cameras 1.3.3。
-- `.venv/`：Python 3.12 独立环境。
-- `outputs/server.stderr.log`：运行日志；`outputs/server.pid`：启动时的进程号。
+```powershell
+.\.venv\Scripts\python.exe audio_engine.py --list-devices
+.\.venv\Scripts\python.exe audio_engine.py
+# 指定实际输出设备名称或当前枚举索引
+.\.venv\Scripts\python.exe app.py --audio-device "G733 Windows WASAPI"
 
-如需重建环境：安装 Python 3.12 后，执行 `powershell -ExecutionPolicy Bypass -File .\setup.ps1`，再双击 start.cmd。已下载模型会通过 SHA-256 校验后复用，部署完成后运行无需网络。
+# 明确标记的合成演示，无摄像头，默认 mock 不发声
+.\.venv\Scripts\python.exe app.py --demo
+# 合成轨迹驱动真实音频输出
+.\.venv\Scripts\python.exe app.py --demo --audio sounddevice
+# 关闭声音，视觉继续
+.\.venv\Scripts\python.exe app.py --audio off
+```
 
-官方源码固定版本：`47534e27c9851bb1128ccc0102f1145e27f23f98`。
+初始化失败显示 `audio_status=error` 和原因，视觉继续；mock/disabled 不代表实际发声。事件在本进程消费，浏览器只显示历史。通过 `--interaction-config config.json` 可覆盖 [InteractionConfig](instrument_logic.py)，例如 `{"chord_dwell_s":0.12,"cooldown_s":0.18}`。阈值使用秒和 UV/s，不使用连续帧数。默认保守复位可能漏掉极快/遮挡动作，应实测后调整。
 
-- [手掌检测模型](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/palm_detection_mediapipe)
-- [手部关键点模型](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/handpose_estimation_mediapipe)
+## 接口与录制
 
-模型 SHA-256：
+`GET /api/landmarks` 仍可供 `example_client.py` 使用，旧字段保留并新增 schema v2 的板面、21×2 UV、交互和音频数据。见 [API / 数据流](docs/integration/API.md) 及 [完整模拟 JSON](docs/integration/schema-v2.synthetic.json)。
+
+```powershell
+.\.venv\Scripts\python.exe example_client.py
+```
+
+点击“开始录制/停止录制”，保存到 `outputs/日期_时间_微秒/`：
+
+- `landmarks.jsonl`：所有处理帧，含无手帧及完整 instrument/interaction。
+- `landmarks.csv`：原列保留，追加 instrument_u/v；无投影留空。
+- `events.jsonl`：每个新 event_id 一条。
+
+独立写线程和有界队列，磁盘失败/积压显式报告。`outputs/` 全部忽略，不提交照片、视频或日志。调试面板保留节点表及 XY/XZ 局部投影。网页使用 `/api/snapshot` 获取同一帧图像与状态，原 `/frame.jpg` 保留。
+
+## 可重复验证
+
+先下载原回归必需的 Google 官方双手照片（不随仓库分发）：
+
+```powershell
+New-Item -ItemType Directory -Force outputs | Out-Null
+Invoke-WebRequest https://storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg -OutFile outputs/test_hands.jpg
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe tools/verify_runtime.py --seconds 32 --mode synthetic --audio mock
+.\.venv\Scripts\python.exe tools/verify_runtime.py --seconds 32 --mode synthetic --audio sounddevice
+.\.venv\Scripts\python.exe tools/verify_runtime.py --seconds 62 --mode onnx --audio mock
+```
+
+前两种运行使用脚本手部 + 真 ArUco；第三种用真实 ONNX 识别静态照片及生成的 Marker，检查一分钟静止误触。报告在各录制目录的 `runtime_report.json`。原 `tests/test_pipeline.py` 三项测试未删除或跳过。照片来源：[Google 官方手部示例](https://github.com/google-ai-edge/mediapipe-samples/blob/main/examples/hand_landmarker/python/hand_landmarker.ipynb)。
+
+## Jetson Xavier NX
+
+参阅 [JETSON](docs/integration/JETSON.md)。Linux 摄像头隔离到 V4L2/GStreamer，不强制导入 Windows 枚举；提供候选 `requirements-jetson.txt` 和只读 `tools/jetson_preflight.py`。不假设 PC wheel/Python 3.12 可直接移植。≥20 FPS 与 <200 ms 是尚未实测的目标。
+
+默认 loopback；远程观看优先 SSH 转发。显式 `--host` 开启局域网查看，远端控制还需 `--allow-remote-controls`。服务无认证，不在公网暴露。
+
+## 来源和限制
+
+Zoo 固定 `47534e27c9851bb1128ccc0102f1145e27f23f98`，Apache-2.0 文本和原署名在 `vendor/opencv_zoo_runtime/`。模型校验：
 
 ```text
 palm_detection_mediapipe_2023feb.onnx
@@ -103,29 +115,6 @@ handpose_estimation_mediapipe_2023feb.onnx
 db0898ae717b76b075d9bf563af315b29562e11f8df5027a1ef07b02bef6d81c
 ```
 
-仅对两个官方包装类的模型加载行做本地兼容修改：`readNet(path)` 改为 `readNetFromONNX(np.fromfile(path, dtype=np.uint8))`，解决 Windows 中文路径；推理与模型后处理数学逻辑保持官方版本。`download_models.py` 会检查并应用此补丁。
+MotionMuse 的 ArUco、布局、交互设计与视觉语言来源于 SMF-an 及原贡献者；B 未声明公开许可证，本次按组内任务整合，**对外重新发布前由成员确认授权**。未替他人代码声明新许可证。音源见 [assets/audio](assets/audio/README.md)。
 
-## 验证
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m pip check
-```
-
-测试照片不随仓库提交。可先运行以下命令下载（仅入站下载公开测试图片）：
-
-```powershell
-New-Item -ItemType Directory -Force outputs | Out-Null
-Invoke-WebRequest https://storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg -OutFile outputs/test_hands.jpg
-```
-
-回归测试使用 [Google 官方示例中的双手照片](https://github.com/google-ai-edge/mediapipe-samples/blob/main/examples/hand_landmarker/python/hand_landmarker.ipynb)，本机已保存为 `outputs/test_hands.jpg`。测试涵盖两只手、21×3 有限坐标、归一化一致性、连续帧 ID、无手清空和非镜像模式。重建时可从 `https://storage.googleapis.com/mediapipe-tasks/hand_landmarker/woman_hands.jpg` 下载到该路径。
-
-原始机器上的实测报告位于 `outputs/verification_report.json`。验证得到 3,515 帧、其中双手帧 1,514 帧，CSV 共 99,813 行；平均处理速度约 25 FPS，双手帧约 22 FPS，3 项回归测试通过。`outputs/` 整体不提交，摄像头录制、测试照片、截图、日志及验证原始数据仅保留在本机。新克隆可按上述步骤重新验证。
-
-## 常见问题
-
-- 长时间启动中：C270 的 MSMF 初始化约 30 秒；检查运行日志。若始终无画面，关闭占用摄像头的软件、重新插拔后重启程序。
-- 左右手暂时跳变：保持手掌完整可见；模型在遮挡、手背和特殊角度下仍可能误判。
-- 帧率降低：当前逐帧进行手掌检测与关键点推理，默认 CPU、640×480；双手推理比单手慢，录制也有少量开销。
-- 浏览器连接断开：检查后台进程与日志；重新运行 start.cmd。端口被其他应用占用时可通过 start.ps1 的 `-Port` 参数更换。
+真人遮挡、左右手交叉、倾斜、反光、低光及高速运动仍需实测；track_id 不是永久身份。原 README 的 C270/FPS 成绩属于原作者环境，本次不沿用为集成验收结果。

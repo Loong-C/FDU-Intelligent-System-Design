@@ -1,0 +1,5 @@
+# Candidate Python 3.10 environment, NOT hardware-validated.
+# Supply OpenCV >=4.7 built for this interpreter with ArUco + DNN + V4L2/GStreamer.
+# Do not pip-install a second cv2 wheel over the Jetson OpenCV build.
+numpy==1.26.4
+sounddevice==0.5.3

@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-22",
+  "timezone": "Asia/Shanghai",
+  "cpu": "Intel Core i7-14700 (20 cores / 28 logical CPUs)",
+  "audio_output": "G733 Gaming Headset / Windows WASAPI, index 24 at test time",
+  "physical_camera": "NOT TESTED; only ToDesk/OBS virtual cameras enumerated",
+  "jetson": "NOT TESTED",
+  "acoustic_latency": "NOT TESTED",
+  "runs": {
+    "synthetic": {
+      "mode": "synthetic",
+      "hardware_acceptance": "NOT TESTED",
+      "platform": "Windows-11-10.0.26100-SP0",
+      "python": "3.12.9",
+      "opencv": "4.12.0",
+      "elapsed_s": 32.0,
+      "frames": 951,
+      "fps": 29.71875,
+      "valid_board_frames": 951,
+      "two_hand_frames": 951,
+      "generated_events": 53,
+      "unique_event_ids": 53,
+      "chords": [
+        "Am",
+        "C",
+        "F",
+        "G"
+      ],
+      "directions": [
+        "down",
+        "up"
+      ],
+      "processing_ms_p50": 6.025000009685755,
+      "processing_ms_p95": 7.585200015455484,
+      "inference_ms_p50": 0.0,
+      "aruco_ms_p50": 1.796,
+      "audio": {
+        "status": "ready",
+        "backend": "sounddevice",
+        "error": null,
+        "queue_depth": 0,
+        "queue_capacity": 8,
+        "accepted_events": 53,
+        "played_events": 53,
+        "dropped_events": 0,
+        "duplicate_events": 0,
+        "output_underflows": 0,
+        "event_to_callback_ms_p50": 7.348800078034401,
+        "event_to_callback_ms_p95": 11.725640017539263
+      },
+      "recording_error": null,
+      "recorded_frames": 951,
+      "recording_folder": "outputs/20261022_195907_736992"
+    },
+    "onnx": {
+      "mode": "onnx",
+      "hardware_acceptance": "NOT TESTED",
+      "platform": "Windows-11-10.0.26100-SP0",
+      "python": "3.12.9",
+      "opencv": "4.12.0",
+      "elapsed_s": 62.07800000021234,
+      "frames": 782,
+      "fps": 12.597055317460697,
+      "valid_board_frames": 782,
+      "two_hand_frames": 782,
+      "generated_events": 0,
+      "unique_event_ids": 0,
+      "chords": [],
+      "directions": [],
+      "processing_ms_p50": 86.07209986075759,
+      "processing_ms_p95": 98.14083524979651,
+      "inference_ms_p50": 68.88,
+      "aruco_ms_p50": 8.141,
+      "audio": {
+        "status": "mock",
+        "backend": "mock",
+        "error": null,
+        "queue_depth": 0,
+        "queue_capacity": 8,
+        "accepted_events": 0,
+        "played_events": 0,
+        "dropped_events": 0,
+        "duplicate_events": 0,
+        "output_underflows": 0,
+        "event_to_callback_ms_p50": null,
+        "event_to_callback_ms_p95": null
+      },
+      "recording_error": null,
+      "recorded_frames": 782,
+      "recording_folder": "outputs/20261022_200003_290083"
+    }
+  }
+}
