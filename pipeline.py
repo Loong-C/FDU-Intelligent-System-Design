@@ -7,6 +7,7 @@ from aruco_tracking import ArucoBoardTracker
 from hand_tracking import HandTracker, annotate
 from instrument_geometry import InstrumentLayout, fuse_hands, overlay_polygons, raw_to_display_xy
 from instrument_logic import InstrumentLogic
+from timing import monotonic_s
 
 
 class PerceptionPipeline:
@@ -20,7 +21,7 @@ class PerceptionPipeline:
 
     def process(self, raw_frame, timestamp_unix_s=None, timestamp_monotonic_s=None):
         captured = time.time() if timestamp_unix_s is None else timestamp_unix_s
-        mono = time.monotonic() if timestamp_monotonic_s is None else timestamp_monotonic_s
+        mono = monotonic_s() if timestamp_monotonic_s is None else timestamp_monotonic_s
         started = time.perf_counter()
         display, packet = self.hands.process(raw_frame, captured)
         instrument = self.board.process(raw_frame, mono)

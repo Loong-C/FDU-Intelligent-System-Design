@@ -10,6 +10,7 @@ import threading
 import time
 import numpy as np
 from instrument_geometry import CHORDS
+from timing import monotonic_s
 
 NOTES = {'C': (48, 55, 60, 64, 67), 'G': (43, 50, 55, 59, 62),
          'Am': (45, 52, 57, 60, 64), 'F': (41, 48, 53, 57, 60)}
@@ -86,7 +87,7 @@ class SoundDeviceBackend:
 
 class AudioEngine:
     def __init__(self, backend=None, sample_rate=48000, queue_size=8, max_voices=8,
-                 max_event_age_s=.2, clock=time.monotonic, enabled=True):
+                 max_event_age_s=.2, clock=monotonic_s, enabled=True):
         if queue_size < 1 or max_voices < 1 or sample_rate < 8000 or max_event_age_s <= 0:
             raise ValueError('Invalid audio configuration')
         self.backend = backend if backend is not None else SoundDeviceBackend()
@@ -203,7 +204,7 @@ def main():
         if engine.snapshot()['status'] == 'error':
             raise RuntimeError(engine.snapshot()['error'])
         for i, chord in enumerate(CHORDS, 1):
-            engine.submit({'event_id': i, 'source_frame_id': 0, 'timestamp_monotonic_s': time.monotonic(),
+            engine.submit({'event_id': i, 'source_frame_id': 0, 'timestamp_monotonic_s': monotonic_s(),
                            'chord': chord, 'direction': 'down', 'velocity': 60+i*15})
             time.sleep(.4)
         time.sleep(1.)

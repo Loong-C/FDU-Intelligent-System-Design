@@ -1,4 +1,5 @@
 .venv/
+.venv-jetson/
 __pycache__/
 outputs/
 *.log

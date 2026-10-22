@@ -16,6 +16,7 @@ from instrument_logic import InstrumentLogic, InteractionConfig
 from audio_engine import AudioEngine, MockAudioBackend, SoundDeviceBackend
 from camera_sources import cameras, open_camera
 from recording import Recorder
+from timing import monotonic_s
 
 LOG = logging.getLogger('motionmuse')
 
@@ -138,7 +139,7 @@ class Service:
                         self.stop.wait(.1)
                         continue
                 first, failed = False, 0
-                captured, mono = time.time(), time.monotonic()
+                captured, mono = time.time(), monotonic_s()
                 display, packet = self.pipeline.process(frame, captured, mono)
                 packet.setdefault('source', 'video' if self.args.video else 'camera')
                 if audio_mode == 'mock' and self.audio.status == 'mock':

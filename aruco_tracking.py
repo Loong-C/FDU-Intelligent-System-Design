@@ -8,6 +8,7 @@ import time
 import cv2 as cv
 import numpy as np
 from instrument_geometry import BOARD_UV, PERIMETER, project
+from timing import monotonic_s
 
 REQUIRED_IDS = (0, 1, 2, 3)
 
@@ -26,7 +27,7 @@ def _valid_quad(points, min_area_px):
 
 
 class ArucoBoardTracker:
-    def __init__(self, hold_s=.25, min_area_px=400., clock=time.monotonic, detector=None):
+    def __init__(self, hold_s=.25, min_area_px=400., clock=monotonic_s, detector=None):
         if hold_s < 0 or min_area_px <= 0:
             raise ValueError('Invalid board tracking thresholds')
         if detector is None:

@@ -1,8 +1,11 @@
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 if (-not (Test-Path -LiteralPath '.venv\Scripts\python.exe')) {
-    $python312 = & python -c "import sys; print(sys.executable if sys.version_info[:2] == (3, 12) else '')" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $python312) {
+    $python312 = $null
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $python312 = & python -c "import sys; print(sys.executable if sys.version_info[:2] == (3, 12) else '')" 2>$null
+    }
+    if ($python312) {
         & $python312 -m venv .venv
     } else {
         py -3.12 -m venv .venv

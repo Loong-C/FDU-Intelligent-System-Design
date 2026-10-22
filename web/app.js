@@ -18,6 +18,8 @@ function clearLive(message) {
   $('fps').textContent = '—';
   $('event').textContent = '—';
   $('boardState').textContent = 'UNAVAILABLE';
+  $('markerState').textContent = '— / 4 MARKERS';
+  $('frameInfo').textContent = '无新鲜画面';
   $('audioState').textContent = '状态不可用';
   $('audioDetail').textContent = '等待新的服务状态';
   $('eventDetail').textContent = '历史事件见下方记录';
@@ -133,7 +135,9 @@ $('stop').onclick = async () => {
   try {
     const r = await fetch('/api/shutdown', {method:'POST'});
     if (!r.ok) throw Error(await r.text());
+    const state = await r.json();
     stopped = true; clearLive('服务已停止，可重新运行启动脚本。');
+    $('recording').textContent = state.last_recording ? '录制结束：'+state.last_recording : '未录制';
     $('record').disabled = $('stop').disabled = true;
     $('audioState').textContent = '已停止';
   } catch (e) {$('error').textContent = e.message;}

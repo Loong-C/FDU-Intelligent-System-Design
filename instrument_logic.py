@@ -7,6 +7,7 @@ import math
 import time
 import numpy as np
 from instrument_geometry import CHORDS, InstrumentLayout
+from timing import monotonic_s
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class InteractionConfig:
 
 
 class InstrumentLogic:
-    def __init__(self, layout=None, config=None, clock=time.monotonic):
+    def __init__(self, layout=None, config=None, clock=monotonic_s):
         self.layout, self.config, self.clock = layout or InstrumentLayout(), config or InteractionConfig(), clock
         self.event_id = 0
         self.last_frame = self.last_time = None
