@@ -11,7 +11,9 @@ from urllib.parse import urlparse
 import cv2 as cv
 from hand_tracking import ROOT, HandTracker
 from pipeline import PerceptionPipeline, annotate_instrument
-from instrument_geometry import InstrumentLayout
+from instrument_geometry import InstrumentLayout, legacy_packet
+from aruco_tracking import ArucoBoardTracker, TrackingConfig
+from board_definition import BoardDefinition
 from instrument_logic import InstrumentLogic, InteractionConfig
 from audio_engine import AudioEngine, MockAudioBackend, SoundDeviceBackend
 from camera_sources import cameras, open_camera
@@ -27,7 +29,7 @@ class Service:
         self.lock = threading.RLock()
         self.record_control = threading.Lock()
         self.stop = threading.Event()
-        self.packet = {'schema_version': 2, 'hands': [], 'status': 'starting',
+        self.packet = {'schema_version': 3, 'hands': [], 'status': 'starting',
                        'instrument': {'status': 'lost', 'reason': 'starting', 'visible_ids': []},
                        'interaction': {'current_chord': None, 'chord_valid': False},
                        'events': [], 'recent_events': [], 'audio_status': 'starting'}
@@ -59,7 +61,7 @@ class Service:
                 with self.lock:
                     self.recording_error = old.error
 
-    def latest(self):
+    def latest(self, schema_version=2):
         with self.lock:
             result = dict(self.packet, recording=self.recording is not None and not self.recording.stop.is_set(),
                           recording_error=self.recording.error if self.recording else self.recording_error,
@@ -68,11 +70,11 @@ class Service:
             if self.audio is not None:
                 result['audio'] = self.audio.snapshot()
                 result['audio_status'] = result['audio']['status']
-            return result
+            return legacy_packet(result) if schema_version == 2 else result
 
     def snapshot(self):
         with self.lock:
-            return self.latest(), self.jpeg
+            return self.latest(schema_version=3), self.jpeg
 
     def publish(self, display, packet):
         ok, encoded = cv.imencode('.jpg', display, [cv.IMWRITE_JPEG_QUALITY, 85])
@@ -102,6 +104,9 @@ class Service:
         try:
             cv.setNumThreads(4)
             layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u')
+            board = BoardDefinition.load(self.args.board) if self.args.board else None
+            tracking = TrackingConfig(hold_s=self.args.board_hold)
+            board_tracker = ArucoBoardTracker(board=board, learn_legacy=True, config=tracking)
             config = InteractionConfig()
             if self.args.interaction_config:
                 with open(self.args.interaction_config, encoding='utf-8') as file:
@@ -121,7 +126,7 @@ class Service:
             device = int(device) if device and device.isdigit() else device
             backend = MockAudioBackend() if audio_mode in ('mock', 'off') else SoundDeviceBackend(device)
             self.audio = AudioEngine(backend, enabled=audio_mode != 'off')
-            self.pipeline = PerceptionPipeline(hands=tracker, layout=layout, audio=self.audio,
+            self.pipeline = PerceptionPipeline(hands=tracker, board=board_tracker, layout=layout, audio=self.audio,
                                                logic=InstrumentLogic(layout, config))
             previous, fps, failed = time.perf_counter(), 0., 0
             deadline = time.monotonic() + self.args.duration if self.args.duration else None
@@ -195,6 +200,8 @@ def handler_for(service):
                     self.send(200, (ROOT/'web'/filename).read_bytes(), content_type)
                 elif path in ('/api/landmarks', '/api/state'):
                     self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
+                elif path in ('/api/v3/landmarks', '/api/v3/state'):
+                    self.send(200, json.dumps(service.latest(schema_version=3), allow_nan=False).encode(), 'application/json')
                 elif path == '/api/snapshot':
                     packet, jpeg = service.snapshot()
                     body = {'packet': packet, 'image_base64': base64.b64encode(jpeg).decode() if jpeg else None}
@@ -257,6 +264,8 @@ def build_parser():
     parser.add_argument('--no-mirror', action='store_true')
     parser.add_argument('--layout', choices=['standard', 'flip-u'], default='standard')
     parser.add_argument('--interaction-config', help='JSON overrides for InteractionConfig thresholds')
+    parser.add_argument('--board', help='Physical BoardDefinition JSON; omitted = automatic legacy corner learning')
+    parser.add_argument('--board-hold', type=float, default=.25, help='Seconds to hold last reliable pose for display')
     parser.add_argument('--audio', choices=['sounddevice', 'mock', 'off'], help='Default sounddevice; demo defaults to mock')
     parser.add_argument('--audio-device', help='Output device index or PortAudio device name')
     parser.add_argument('--duration', type=float, help='Optional bounded processing duration in seconds')

@@ -13,7 +13,7 @@ from timing import monotonic_s
 class PerceptionPipeline:
     def __init__(self, hands=None, board=None, layout=None, logic=None, audio=None):
         self.hands = hands if hands is not None else HandTracker()
-        self.board = board if board is not None else ArucoBoardTracker()
+        self.board = board if board is not None else ArucoBoardTracker(learn_legacy=True)
         self.layout = layout or InstrumentLayout()
         self.logic = logic if logic is not None else InstrumentLogic(self.layout)
         self.audio = audio

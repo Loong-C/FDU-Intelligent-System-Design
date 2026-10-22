@@ -77,6 +77,8 @@ class InstrumentLogic:
     def _point(self, hand, nodes):
         if hand is None:
             return None
+        if hand.get('interaction_eligible') is False:
+            return None
         try:
             confidence = float(hand['confidence'])
             handedness = float(hand.get('handedness_score', 1.))

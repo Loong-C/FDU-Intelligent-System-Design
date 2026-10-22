@@ -4,6 +4,7 @@ Region dimensions reference MotionMuse/SMF-an; see docs/integration/BASELINE.md.
 UV is a 2-D image projection, not a contact or depth measurement.
 """
 from dataclasses import dataclass
+from copy import deepcopy
 import numpy as np
 
 CHORDS = ('C', 'G', 'Am', 'F')
@@ -98,15 +99,30 @@ class InstrumentLayout:
 
 
 def fuse_hands(packet, instrument):
-    """Mutate only additive schema-v2 fields; retain A's display-coordinate arrays."""
+    """Schema 3 distinguishes mathematical projection from permission to interact."""
     matrix = instrument['homography_camera_to_instrument']
     for hand in packet['hands']:
         raw = display_to_raw_xy(np.asarray(hand['landmarks_px'])[:, :2],
                                 packet['frame_width'], packet['mirrored'])
         uv = project(raw, matrix)
         hand['landmarks_instrument_uv'] = uv.tolist() if uv is not None and uv.shape == (21, 2) else None
-        hand['projection_status'] = 'valid' if hand['landmarks_instrument_uv'] is not None else 'unavailable'
-    packet.update(schema_version=2, instrument=instrument)
+        available = hand['landmarks_instrument_uv'] is not None
+        hand['projection_available'] = available
+        hand['projection_status'] = instrument.get('status', 'unavailable') if available else 'unavailable'
+        hand['interaction_eligible'] = available and instrument.get('status') == 'valid'
+    packet.update(schema_version=3, instrument=instrument)
+
+
+def legacy_packet(packet):
+    """Explicit schema-2 adapter for existing /api/landmarks and /api/state clients."""
+    result = deepcopy(packet)
+    result['schema_version'] = 2
+    for hand in result.get('hands', []):
+        hand['projection_status'] = 'valid' if hand.get('landmarks_instrument_uv') is not None else 'unavailable'
+    instrument = result.get('instrument', {})
+    if instrument.get('status') == 'degraded':
+        instrument['status'] = 'held'
+    return result
 
 
 def overlay_polygons(packet, layout):
@@ -114,7 +130,7 @@ def overlay_polygons(packet, layout):
     regions = layout.regions()
     result = {}
     shapes = dict(regions['chords'], strum=regions['strum'], axis=regions['axis'],
-                  board=BOARD_UV[list(PERIMETER)])
+                  board=packet['instrument'].get('outline_uv') or BOARD_UV[list(PERIMETER)])
     for name, points in shapes.items():
         projected = instrument_to_display_xy(points, packet['instrument']['homography_instrument_to_camera'],
                                              packet['frame_width'], packet['mirrored'])
