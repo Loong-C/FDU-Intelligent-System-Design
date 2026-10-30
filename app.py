@@ -11,7 +11,11 @@ from urllib.parse import urlparse
 import cv2 as cv
 from hand_tracking import ROOT, HandTracker
 from pipeline import PerceptionPipeline, annotate_instrument
-from instrument_geometry import InstrumentLayout
+from instrument_geometry import InstrumentLayout, legacy_packet
+from aruco_tracking import ArucoBoardTracker, TrackingConfig
+from board_definition import BoardDefinition
+from board_calibration import CalibrationSessions
+from instrument_preset import InstrumentPreset
 from instrument_logic import InstrumentLogic, InteractionConfig
 from audio_engine import AudioEngine, MockAudioBackend, SoundDeviceBackend
 from camera_sources import cameras, open_camera
@@ -26,8 +30,12 @@ class Service:
         self.args = args
         self.lock = threading.RLock()
         self.record_control = threading.Lock()
+        self.pipeline_lock = threading.RLock()
+        self.calibration = CalibrationSessions(ROOT/'config/boards')
+        self.calibrating = False
+        self.raw_frame = None
         self.stop = threading.Event()
-        self.packet = {'schema_version': 2, 'hands': [], 'status': 'starting',
+        self.packet = {'schema_version': 3, 'hands': [], 'status': 'starting',
                        'instrument': {'status': 'lost', 'reason': 'starting', 'visible_ids': []},
                        'interaction': {'current_chord': None, 'chord_valid': False},
                        'events': [], 'recent_events': [], 'audio_status': 'starting'}
@@ -43,38 +51,43 @@ class Service:
                             next((c['name'] for c in self.device_list if c['index'] == self.index), str(self.index)))
         self.worker = threading.Thread(target=self.run, name='single-camera-worker', daemon=True)
 
-    def set_recording(self, enabled):
+    def set_recording(self, enabled, raw_frames=None):
         # Serialize control requests, but drain files outside the snapshot/camera lock.
         with self.record_control:
             with self.lock:
                 old = None
-                if enabled and self.recording is None:
-                    self.recording = Recorder(ROOT / 'outputs')
-                    self.last_recording = str(self.recording.folder)
-                    self.recording_error = None
-                elif not enabled and self.recording is not None:
+                if self.recording is not None and (not enabled or self.recording.stop.is_set() or self.recording.error):
                     old, self.recording = self.recording, None
             if old is not None:
                 old.close()
                 with self.lock:
                     self.recording_error = old.error
+            with self.lock:
+                if enabled and self.recording is None:
+                    self.recording = Recorder(ROOT / 'outputs', raw_frames=self.args.record_video if raw_frames is None else raw_frames,
+                                              metadata={'source': self.camera_name, 'schema_version': 3})
+                    self.last_recording = str(self.recording.folder)
+                    self.recording_error = None
 
-    def latest(self):
+    def latest(self, schema_version=2):
         with self.lock:
             result = dict(self.packet, recording=self.recording is not None and not self.recording.stop.is_set(),
                           recording_error=self.recording.error if self.recording else self.recording_error,
                           last_recording=self.last_recording, camera_name=self.camera_name,
                           camera_index=self.index, camera_backend=self.backend_name, available_cameras=self.device_list)
+            result['recording_details'] = self.recording.snapshot() if self.recording else None
+            result['calibrating'] = self.calibrating
+            result['recording_default_raw_frames'] = self.args.record_video
             if self.audio is not None:
                 result['audio'] = self.audio.snapshot()
                 result['audio_status'] = result['audio']['status']
-            return result
+            return legacy_packet(result) if schema_version == 2 else result
 
     def snapshot(self):
         with self.lock:
-            return self.latest(), self.jpeg
+            return self.latest(schema_version=3), self.jpeg
 
-    def publish(self, display, packet):
+    def publish(self, display, packet, raw_frame=None):
         ok, encoded = cv.imencode('.jpg', display, [cv.IMWRITE_JPEG_QUALITY, 85])
         if not ok:
             raise RuntimeError('JPEG encoding failed')
@@ -82,8 +95,9 @@ class Service:
         json.dumps(packet, allow_nan=False)
         with self.lock:
             self.packet, self.jpeg = packet, encoded.tobytes()
+            self.raw_frame = None if raw_frame is None else raw_frame.copy()
             if self.recording is not None:
-                self.recording.submit(packet)
+                self.recording.submit(packet, raw_frame, self.pipeline.configuration() if self.pipeline else None)
 
     def fail_frame(self, message):
         with self.lock:
@@ -94,6 +108,7 @@ class Service:
                                interaction=self.pipeline.logic.invalidate() if self.pipeline else
                                {'current_chord': None, 'chord_valid': False})
             self.jpeg = None
+            self.raw_frame = None
         if self.pipeline is not None:
             self.pipeline.board.reset()
 
@@ -101,11 +116,22 @@ class Service:
         cap = None
         try:
             cv.setNumThreads(4)
-            layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u')
-            config = InteractionConfig()
+            preset = InstrumentPreset.load(self.args.preset) if self.args.preset else InstrumentPreset.default()
+            layout = InstrumentLayout(flip_u=self.args.layout == 'flip-u', preset=preset)
+            board = BoardDefinition.load(self.args.board) if self.args.board else None
+            tracking_data = {}
+            if self.args.tracking_config:
+                with open(self.args.tracking_config, encoding='utf-8') as file:
+                    tracking_data.update(json.load(file))
+            if self.args.board_hold is not None:
+                tracking_data['hold_s'] = self.args.board_hold
+            tracking = TrackingConfig(**tracking_data)
+            board_tracker = ArucoBoardTracker(board=board, learn_legacy=True, config=tracking)
+            config_data = dict(preset.interaction)
             if self.args.interaction_config:
                 with open(self.args.interaction_config, encoding='utf-8') as file:
-                    config = InteractionConfig(**json.load(file))
+                    config_data.update(json.load(file))
+            config = InteractionConfig(**config_data)
             if self.args.demo:
                 from synthetic_input import SyntheticHandTracker, board_image
                 tracker = SyntheticHandTracker(mirror=not self.args.no_mirror, layout=layout)
@@ -121,7 +147,7 @@ class Service:
             device = int(device) if device and device.isdigit() else device
             backend = MockAudioBackend() if audio_mode in ('mock', 'off') else SoundDeviceBackend(device)
             self.audio = AudioEngine(backend, enabled=audio_mode != 'off')
-            self.pipeline = PerceptionPipeline(hands=tracker, layout=layout, audio=self.audio,
+            self.pipeline = PerceptionPipeline(hands=tracker, board=board_tracker, layout=layout, audio=self.audio,
                                                logic=InstrumentLogic(layout, config))
             previous, fps, failed = time.perf_counter(), 0., 0
             deadline = time.monotonic() + self.args.duration if self.args.duration else None
@@ -140,18 +166,20 @@ class Service:
                         continue
                 first, failed = False, 0
                 captured, mono = time.time(), monotonic_s()
-                display, packet = self.pipeline.process(frame, captured, mono)
-                packet.setdefault('source', 'video' if self.args.video else 'camera')
-                if audio_mode == 'mock' and self.audio.status == 'mock':
-                    backend.pump()
-                    packet['audio'] = self.audio.snapshot()
-                    packet['audio_status'] = packet['audio']['status']
-                now = time.perf_counter()
-                instant = 1/max(now-previous, .0001)
-                fps = instant if not fps else .9*fps + .1*instant
-                previous = now
-                packet.update(fps=round(fps, 1))
-                self.publish(annotate_instrument(display, packet, layout), packet)
+                with self.pipeline_lock:
+                    self.calibrating = self.calibration.active()
+                    display, packet = self.pipeline.process(frame, captured, mono, interaction_enabled=not self.calibrating)
+                    packet.setdefault('source', 'video' if self.args.video else 'camera')
+                    if audio_mode == 'mock' and self.audio.status == 'mock':
+                        backend.pump()
+                        packet['audio'] = self.audio.snapshot()
+                        packet['audio_status'] = packet['audio']['status']
+                    now = time.perf_counter()
+                    instant = 1/max(now-previous, .0001)
+                    fps = instant if not fps else .9*fps + .1*instant
+                    previous = now
+                    packet.update(fps=round(fps, 1))
+                    self.publish(annotate_instrument(display, packet, layout), packet, frame)
                 if self.args.demo:
                     self.stop.wait(1/30)
             with self.lock:
@@ -167,6 +195,34 @@ class Service:
             if self.audio is not None:
                 self.audio.close()
             self.set_recording(False)
+
+    def calibration_request(self, action, body):
+        with self.pipeline_lock:
+            if action == 'capture':
+                with self.lock:
+                    if monotonic_s()-self.packet.get('timestamp_monotonic_s', 0) > .5:
+                        raise ValueError('Camera frame is stale; wait for a fresh frame')
+                    result = self.calibration.capture(self.raw_frame, self.packet)
+                self.calibrating = True
+                if self.pipeline:
+                    self.pipeline.logic.invalidate('calibration_in_progress')
+                return result
+            if action == 'preview':
+                if self.pipeline is None:
+                    raise ValueError('Pipeline not ready')
+                return self.calibration.preview(body.get('session_id'), body.get('points_raw'),
+                                                body.get('board_id'), self.pipeline.layout)
+            if action == 'save':
+                board, path = self.calibration.save(body.get('session_id'), body.get('preview_token'))
+                self.pipeline.board = ArucoBoardTracker(board=board, config=self.pipeline.board.config)
+                self.pipeline.logic.invalidate('board_changed')
+                self.calibrating = False
+                return dict(saved=str(path.relative_to(ROOT)), board_id=board.board_id, active=True)
+            if action == 'cancel':
+                self.calibration.cancel(body.get('session_id'))
+                self.calibrating = False
+                return dict(cancelled=True)
+            raise ValueError('Unknown calibration action')
 
 
 def handler_for(service):
@@ -188,13 +244,15 @@ def handler_for(service):
         def do_GET(self):
             path = urlparse(self.path).path
             try:
-                if path in ('/', '/app.js', '/style.css'):
-                    filename = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css'}[path]
+                if path in ('/', '/app.js', '/style.css', '/calibration.js'):
+                    filename = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css', '/calibration.js': 'calibration.js'}[path]
                     content_type = {'/': 'text/html; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
-                                    '/style.css': 'text/css; charset=utf-8'}[path]
+                                    '/style.css': 'text/css; charset=utf-8', '/calibration.js': 'text/javascript; charset=utf-8'}[path]
                     self.send(200, (ROOT/'web'/filename).read_bytes(), content_type)
                 elif path in ('/api/landmarks', '/api/state'):
                     self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
+                elif path in ('/api/v3/landmarks', '/api/v3/state'):
+                    self.send(200, json.dumps(service.latest(schema_version=3), allow_nan=False).encode(), 'application/json')
                 elif path == '/api/snapshot':
                     packet, jpeg = service.snapshot()
                     body = {'packet': packet, 'image_base64': base64.b64encode(jpeg).decode() if jpeg else None}
@@ -221,11 +279,30 @@ def handler_for(service):
                 return
             path = urlparse(self.path).path
             try:
-                if path == '/api/record/start':
+                if path.startswith('/api/calibration/'):
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 <= length <= 16384:
+                        raise ValueError('Request body exceeds 16 KiB')
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        raise ValueError('Expected a JSON object')
+                    result = service.calibration_request(path.rsplit('/', 1)[-1], body)
+                    self.send(200, json.dumps(result, allow_nan=False).encode(), 'application/json')
+                    return
+                elif path == '/api/record/start':
                     if service.latest()['status'] != 'running':
                         self.send(409, b'Camera not running', 'text/plain')
                         return
-                    service.set_recording(True)
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 <= length <= 1024:
+                        raise ValueError('Recording request too large')
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                    if not isinstance(body, dict):
+                        raise ValueError('Expected a JSON object')
+                    raw_frames = body.get('raw_frames', service.args.record_video)
+                    if not isinstance(raw_frames, bool):
+                        raise ValueError('raw_frames must be true or false')
+                    service.set_recording(True, raw_frames)
                 elif path == '/api/record/stop':
                     service.set_recording(False)
                 elif path == '/api/shutdown':
@@ -235,6 +312,8 @@ def handler_for(service):
                     self.send(404, b'Not found', 'text/plain')
                     return
                 self.send(200, json.dumps(service.latest(), allow_nan=False).encode(), 'application/json')
+            except (ValueError, TypeError, KeyError) as exc:
+                self.send(400, str(exc).encode(), 'text/plain; charset=utf-8')
             except (OSError, RuntimeError) as exc:
                 self.send(500, str(exc).encode(), 'text/plain; charset=utf-8')
     return Handler
@@ -257,8 +336,13 @@ def build_parser():
     parser.add_argument('--no-mirror', action='store_true')
     parser.add_argument('--layout', choices=['standard', 'flip-u'], default='standard')
     parser.add_argument('--interaction-config', help='JSON overrides for InteractionConfig thresholds')
+    parser.add_argument('--board', help='Physical BoardDefinition JSON; omitted = automatic legacy corner learning')
+    parser.add_argument('--preset', help='InstrumentPreset JSON; default config/presets/guitar.json')
+    parser.add_argument('--board-hold', type=float, help='Seconds to hold last reliable pose for display; default .25')
+    parser.add_argument('--tracking-config', help='JSON overrides for TrackingConfig quality thresholds')
     parser.add_argument('--audio', choices=['sounddevice', 'mock', 'off'], help='Default sounddevice; demo defaults to mock')
     parser.add_argument('--audio-device', help='Output device index or PortAudio device name')
+    parser.add_argument('--record-video', action='store_true', help='Default recording mode includes lossless raw PNG frames')
     parser.add_argument('--duration', type=float, help='Optional bounded processing duration in seconds')
     parser.add_argument('--palm-threshold', type=float, default=.6)
     parser.add_argument('--hand-threshold', type=float, default=.8)

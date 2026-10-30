@@ -4,7 +4,9 @@ Region dimensions reference MotionMuse/SMF-an; see docs/integration/BASELINE.md.
 UV is a 2-D image projection, not a contact or depth measurement.
 """
 from dataclasses import dataclass
+from copy import deepcopy
 import numpy as np
+from instrument_preset import InstrumentPreset, signed_distance
 
 CHORDS = ('C', 'G', 'Am', 'F')
 BOARD_UV = np.float32(((0, 0), (1, 0), (0, 1), (1, 1)))
@@ -64,49 +66,79 @@ class InstrumentLayout:
     strum_u: tuple = (.68, .90)
     strum_v: tuple = (.15, .85)
     axis_v: float = .5
+    preset: object = None
+
+    def __post_init__(self):
+        if self.preset is None:
+            preset = InstrumentPreset.default()
+            # Preserve callers using the old rectangular layout constructor.
+            if (self.chord_u, self.chord_v, self.strum_u, self.strum_v, self.axis_v) != ((.04, .60), (.20, .80), (.68, .90), (.15, .85), .5):
+                width = (self.chord_u[1]-self.chord_u[0])/4
+                rect = lambda x0, x1, y0, y1: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+                preset = InstrumentPreset('legacy_custom',
+                    {name: rect(self.chord_u[0]+i*width, self.chord_u[0]+(i+1)*width, *self.chord_v) for i, name in enumerate(CHORDS)},
+                    rect(*self.strum_u, *self.strum_v), [[u, self.axis_v] for u in self.strum_u])
+            object.__setattr__(self, 'preset', preset)
 
     def local(self, point):
         u, v = point
         return (1 - u if self.flip_u else u), v
 
     def chord_at(self, point, margin=0.0):
-        u, v = self.local(point)
-        if not self.chord_u[0] <= u <= self.chord_u[1] or not self.chord_v[0] <= v <= self.chord_v[1]:
-            return None
-        width = (self.chord_u[1] - self.chord_u[0]) / len(CHORDS)
-        index = min(int((u - self.chord_u[0]) / width), len(CHORDS) - 1)
-        lo = self.chord_u[0] + index * width
-        if not lo + margin <= u <= lo + width - margin:
-            return None
-        return CHORDS[index]
+        for name, points in self.preset.chords.items():
+            if signed_distance(self.local(point), points) >= margin-1e-8:
+                return name
+        return None
+
+    def contains_chord(self, chord, point, margin=0.):
+        points = self.preset.chords.get(chord)
+        return points is not None and signed_distance(self.local(point), points) >= margin-1e-8
 
     def in_strum_band(self, point):
-        u, v = self.local(point)
-        return self.strum_u[0] <= u <= self.strum_u[1] and self.strum_v[0] <= v <= self.strum_v[1]
+        return signed_distance(self.local(point), self.preset.strum) >= -1e-8
+
+    def strum_coordinate(self, point):
+        """Signed distance along the directed axis normal; .5 keeps v-threshold compatibility."""
+        a, b = np.asarray(self.preset.axis)
+        tangent = b-a
+        normal = np.array([-tangent[1], tangent[0]])/np.linalg.norm(tangent)
+        return .5+float(np.dot(np.asarray(self.local(point))-a, normal))
 
     def _polygon(self, x0, x1, y0, y1):
         return [list(self.local(p)) for p in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))]
 
     def regions(self):
-        width = (self.chord_u[1] - self.chord_u[0]) / len(CHORDS)
-        chords = {name: self._polygon(self.chord_u[0] + i * width,
-                                     self.chord_u[0] + (i + 1) * width, *self.chord_v)
-                  for i, name in enumerate(CHORDS)}
-        return {'name': 'flip-u' if self.flip_u else 'standard', 'chords': chords,
-                'strum': self._polygon(*self.strum_u, *self.strum_v),
-                'axis': [list(self.local((u, self.axis_v))) for u in self.strum_u]}
+        transform = lambda points: [list(self.local(p)) for p in points]
+        return {'name': 'flip-u' if self.flip_u else 'standard', 'preset_id': self.preset.preset_id,
+                'chords': {name: transform(points) for name, points in self.preset.chords.items()},
+                'strum': transform(self.preset.strum), 'axis': transform(self.preset.axis)}
 
 
 def fuse_hands(packet, instrument):
-    """Mutate only additive schema-v2 fields; retain A's display-coordinate arrays."""
+    """Schema 3 distinguishes mathematical projection from permission to interact."""
     matrix = instrument['homography_camera_to_instrument']
     for hand in packet['hands']:
         raw = display_to_raw_xy(np.asarray(hand['landmarks_px'])[:, :2],
                                 packet['frame_width'], packet['mirrored'])
         uv = project(raw, matrix)
         hand['landmarks_instrument_uv'] = uv.tolist() if uv is not None and uv.shape == (21, 2) else None
-        hand['projection_status'] = 'valid' if hand['landmarks_instrument_uv'] is not None else 'unavailable'
-    packet.update(schema_version=2, instrument=instrument)
+        available = hand['landmarks_instrument_uv'] is not None
+        hand['projection_available'] = available
+        hand['projection_status'] = instrument.get('status', 'unavailable') if available else 'unavailable'
+        hand['interaction_eligible'] = available and instrument.get('status') == 'valid'
+    packet.update(schema_version=3, instrument=instrument)
+
+
+def legacy_packet(packet):
+    """Explicit schema-2 adapter for existing /api/landmarks and /api/state clients."""
+    result = deepcopy(packet)
+    result['schema_version'] = 2
+    for hand in result.get('hands', []):
+        hand['projection_status'] = 'valid' if hand.get('landmarks_instrument_uv') is not None else 'unavailable'
+    instrument = result.get('instrument', {})
+    if instrument.get('status') == 'degraded':
+        instrument['status'] = 'held'
+    return result
 
 
 def overlay_polygons(packet, layout):
@@ -114,7 +146,7 @@ def overlay_polygons(packet, layout):
     regions = layout.regions()
     result = {}
     shapes = dict(regions['chords'], strum=regions['strum'], axis=regions['axis'],
-                  board=BOARD_UV[list(PERIMETER)])
+                  board=packet['instrument'].get('outline_uv') or BOARD_UV[list(PERIMETER)])
     for name, points in shapes.items():
         projected = instrument_to_display_xy(points, packet['instrument']['homography_instrument_to_camera'],
                                              packet['frame_width'], packet['mirrored'])

@@ -77,6 +77,8 @@ class InstrumentLogic:
     def _point(self, hand, nodes):
         if hand is None:
             return None
+        if hand.get('interaction_eligible') is False:
+            return None
         try:
             confidence = float(hand['confidence'])
             handedness = float(hand.get('handedness_score', 1.))
@@ -103,10 +105,7 @@ class InstrumentLogic:
         raw_chord = self.layout.chord_at(point)
         # A fresh hand may stay in the previous cell's margin; stale cached chords may not.
         if self.chord_valid and raw_chord is not None:
-            u, _ = self.layout.local(point)
-            width = (self.layout.chord_u[1] - self.layout.chord_u[0]) / 4
-            lo = self.layout.chord_u[0] + CHORDS.index(self.current_chord) * width
-            if lo - self.config.chord_margin <= u <= lo + width + self.config.chord_margin:
+            if self.layout.contains_chord(self.current_chord, point, -self.config.chord_margin):
                 self.candidate = self.current_chord
                 return
         detected = self.layout.chord_at(point, self.config.chord_margin)
@@ -163,12 +162,13 @@ class InstrumentLogic:
         if not self.chord_valid or point is None or not self.layout.in_strum_band(point):
             self._reset_strum()
             return self._state('fresh_chord_and_strum_hand_required'), []
-        tid, side = right['track_id'], self._side(point[1])
+        coordinate = self.layout.strum_coordinate(point)
+        tid, side = right['track_id'], self._side(coordinate)
         previous = self.previous
         self.previous = (point, now, tid)
         if previous is None:
             if side != 'crossing':
-                self.anchor = (side, float(point[1]), now)
+                self.anchor = (side, coordinate, now)
             self.strum_state = side if self.anchor else 'unarmed'
             return self._state(), []
         distance = float(np.linalg.norm(point - previous[0]))
@@ -180,10 +180,10 @@ class InstrumentLogic:
         if side == 'crossing':
             return self._state(), []
         anchor = self.anchor
-        self.anchor = (side, float(point[1]), now)
+        self.anchor = (side, coordinate, now)
         if anchor is None or side == anchor[0]:
             return self._state(), []
-        speed = abs(float(point[1]) - anchor[1]) / (now - anchor[2])
+        speed = abs(coordinate - anchor[1]) / (now - anchor[2])
         if speed < c.min_speed_uv_s or now - self.last_event_time < c.cooldown_s - 1e-9:
             return self._state('slow_crossing_or_cooldown', speed), []
         # Linear speed mapping: min_speed->1, full_velocity_speed->127, clipped.
